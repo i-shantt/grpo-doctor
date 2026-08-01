@@ -227,3 +227,51 @@ def test_alerts_name_the_signal_responsible() -> None:
     alerts = [a for r in synthetic_run(n=200) for a in m.update(r).alerts]
     assert alerts
     assert any(a.message.startswith(("starvation", "truncation", "len_drift")) for a in alerts)
+
+
+# --- flat is not extreme ---------------------------------------------------------------------
+
+
+def test_a_constant_signal_reports_no_z_rather_than_a_huge_one() -> None:
+    """Measured on a real trace: completion length was effectively constant at 7.00 tokens, the
+    step-to-step change had a standard deviation around 1e-3, and a numerical-epsilon floor duly
+    turned a 0.0019-token wiggle into z=+7.42 and an ALARM at step 34 of a healthy stretch.
+
+    The signal was not anomalous, it was flat. Flat must read as uninformative, never as extreme.
+    """
+    m = Monitor()
+    levels = []
+    for i in range(400):
+        levels.append(
+            m.update(
+                StepRecord(
+                    step=i,
+                    reward_mean=0.5,
+                    frac_reward_zero_std=0.2,
+                    # Constant to within floating-point noise, as a converged length series is.
+                    completion_len_mean=7.0 + 1e-9 * ((i * 37) % 11),
+                    completion_clipped_ratio=0.02 + 1e-9 * ((i * 17) % 7),
+                )
+            ).level
+        )
+    assert max(levels) is Level.OK, "a flat run must never alarm"
+
+
+def test_a_real_change_still_fires_once_the_floor_is_cleared() -> None:
+    """The floor must not deafen the signal -- a length change large enough to matter still fires."""
+    m = Monitor()
+    fired = False
+    for i in range(400):
+        length = 7.0 if i < 200 else 7.0 + 0.25 * (i - 200)
+        snap = m.update(
+            StepRecord(
+                step=i,
+                reward_mean=0.5,
+                frac_reward_zero_std=0.2,
+                completion_len_mean=length,
+                completion_clipped_ratio=0.02,
+            )
+        )
+        if i > 210 and snap.level >= Level.WARN:
+            fired = True
+    assert fired, "a sustained real drift must still be detected"

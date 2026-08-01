@@ -54,14 +54,25 @@ class RunningMoments:
             return 0.0
         return math.sqrt(self._m2 / (self._count - 1))
 
-    def z(self, x: float, floor: float = 1e-8) -> float | None:
-        """Standardize against everything seen so far.
+    def z(self, x: float, floor: float = 1e-8, min_count: int = 2) -> float | None:
+        """Standardize against everything seen so far, or None if that would be meaningless.
 
-        Returns None rather than a large number when the history is degenerate. A constant signal
-        that moves once would otherwise produce an unbounded z and a certain false alarm -- which
-        is precisely the hard-negative case (a plateau) the false-alarm budget is spent on.
+        Two guards, and `floor` is the one that matters in practice.
+
+        `min_count` stops a standard deviation estimated from three samples being treated as a
+        baseline.
+
+        `floor` must be set to **the resolution at which the underlying quantity carries
+        information**, not to a numerical epsilon. Measured: on a task where completion length is
+        effectively constant at 7.00 tokens, the step-to-step change had a standard deviation of
+        order 1e-3 tokens -- pure numerical wiggle -- and a default floor of 1e-8 duly z-scored a
+        0.0019-token change into +7.42 and fired an ALARM at step 34 of a healthy stretch. The
+        signal was not anomalous; it was flat, and flat is not the same as extreme.
+
+        Returning None marks the signal uninformative rather than calm, which is the same
+        distinction `None` vs `nan` vs `0.0` draws everywhere else in this package.
         """
-        if self._count < 2:
+        if self._count < max(2, min_count):
             return None
         s = self.std
         if s < floor:

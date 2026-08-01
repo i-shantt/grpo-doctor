@@ -29,11 +29,16 @@ from typing import Any
 
 from grpo_doctor.record import StepRecord
 from grpo_doctor.signals.base import EWMA, RunningMoments, missing
-from grpo_doctor.snapshot import NOT_LOGGED, SignalReading
+from grpo_doctor.snapshot import NOT_LOGGED, WARMING_UP, SignalReading
 
 
 class Truncation:
     name = "truncation"
+
+    MIN_STD = 0.002
+    """A truncation rate flat to within 0.2% of completions carries no information."""
+
+    MIN_COUNT = 20
 
     def __init__(self) -> None:
         self._moments = RunningMoments()
@@ -43,7 +48,7 @@ class Truncation:
         if v is None or not math.isfinite(v):
             return missing(self.name, NOT_LOGGED)
         v = float(v)
-        z = self._moments.z(v)
+        z = self._moments.z(v, floor=self.MIN_STD, min_count=self.MIN_COUNT)
         self._moments.update(v)
         return SignalReading(name=self.name, available=True, value=v, z=z)
 
@@ -52,18 +57,37 @@ class Truncation:
 
 
 class LengthDrift:
+    """Standardized change in smoothed mean completion length.
+
+    The `burn_in` is not a tuning knob, it is a correctness requirement. This signal z-scores the
+    *step-to-step change* in an EWMA, and while that EWMA is still converging toward the series its
+    increments are large and systematically shrinking -- a non-stationary stretch whose statistics
+    describe the filter warming up rather than the run. Accumulating those into the baseline
+    produced a measured z of -6.64 at step 35 on a healthy stretch of a real trace, an alarm 133
+    steps before anything happened, which then got credited as lead time. Two halflives of burn-in
+    removes it.
+    """
+
     name = "len_drift"
 
-    def __init__(self, halflife: float = 10.0) -> None:
+    MIN_STD = 0.01
+    """Tokens per step. Below this the mean length is constant and the deltas are numerical noise."""
+
+    MIN_COUNT = 20
+
+    def __init__(self, halflife: float = 10.0, burn_in: int | None = None) -> None:
         self._smooth = EWMA(halflife)
         self._moments = RunningMoments()
         self._prev: float | None = None
+        self._seen = 0
+        self._burn_in = int(2 * halflife) if burn_in is None else burn_in
 
     def update(self, rec: StepRecord) -> SignalReading:
         v = rec.completion_len_mean
         if v is None or not math.isfinite(v):
             return missing(self.name, NOT_LOGGED)
         v = float(v)
+        self._seen += 1
         smoothed = self._smooth.update(v)
         if self._prev is None or smoothed is None:
             self._prev = smoothed
@@ -71,7 +95,13 @@ class LengthDrift:
 
         delta = smoothed - self._prev
         self._prev = smoothed
-        z = self._moments.z(delta)
+        if self._seen <= self._burn_in:
+            # Observed but deliberately not accumulated: the filter is still converging.
+            return SignalReading(
+                name=self.name, available=True, value=delta, z=None, reason=WARMING_UP
+            )
+
+        z = self._moments.z(delta, floor=self.MIN_STD, min_count=self.MIN_COUNT)
         self._moments.update(delta)
         return SignalReading(name=self.name, available=True, value=delta, z=z)
 
@@ -80,6 +110,7 @@ class LengthDrift:
             "smooth": self._smooth.state_dict(),
             "moments": self._moments.state_dict(),
             "prev": self._prev,
+            "seen": self._seen,
         }
 
 
