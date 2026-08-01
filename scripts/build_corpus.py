@@ -58,7 +58,13 @@ def smoke(args: argparse.Namespace) -> int:
     """One seed of every family on one task, then report what each actually produced."""
     specs: list[RunSpec] = []
     for spec in ALL_SPECS:
-        specs += make_grid(tasks=(args.task,), specs=(spec,), seeds=1, steps=args.steps)
+        specs += make_grid(
+            tasks=(args.task,),
+            specs=(spec,),
+            seeds=args.seeds,
+            steps=args.steps,
+            seeds_by_family={},
+        )
     out_dir = Path(args.out) / "smoke"
 
     print(f"smoke: {len(specs)} runs x {args.steps} steps on {args.task}\n")
@@ -66,20 +72,31 @@ def smoke(args: argparse.Namespace) -> int:
     outcomes = run_grid(specs, out_dir, workers=args.workers, overwrite=args.overwrite)
     summary = summarize(outcomes)
 
-    print(f"\n{'cell':22s} {'label':9s} {'t_collapse':>10s} {'peak':>6s} {'final':>6s}")
-    print("-" * 60)
-    labels: dict[str, str] = {}
-    for spec in sorted(specs, key=lambda s: (s.family, s.dose)):
+    # Aggregated by cell rather than listed per run: with several seeds the question is the
+    # *rate* at which a dose collapses, and a single seed cannot answer it. A dose that fires on
+    # one seed in five is not a failure family, it is noise with a label.
+    by_cell: dict[str, list[tuple[str, int | None, float, float]]] = {}
+    for spec in specs:
         path = trace_path(out_dir, spec.run_id)
         if not path.exists():
-            print(f"{spec.family + '/' + spec.dose:22s} {'CRASHED':9s}")
+            by_cell.setdefault(f"{spec.family}/{spec.dose}", []).append(("crashed", None, 0.0, 0.0))
             continue
-        label, t, peak, final = label_trace(path, spec.probe_every)
-        labels[f"{spec.family}/{spec.dose}"] = label
-        print(
-            f"{spec.family + '/' + spec.dose:22s} {label:9s} "
-            f"{('-' if t is None else t):>10} {peak:6.3f} {final:6.3f}"
+        by_cell.setdefault(f"{spec.family}/{spec.dose}", []).append(
+            label_trace(path, spec.probe_every)
         )
+
+    print(f"\n{'cell':24s} {'collapsed':>10s} {'labels':28s} {'peak':>6s} {'final':>6s}")
+    print("-" * 82)
+    labels: dict[str, str] = {}
+    for cell in sorted(by_cell):
+        rows = by_cell[cell]
+        hits = sum(r[0] not in ("healthy", "crashed") for r in rows)
+        kinds = Counter(r[0] for r in rows)
+        peak = sum(r[2] for r in rows) / len(rows)
+        final = sum(r[3] for r in rows) / len(rows)
+        labels[cell] = "healthy" if hits == 0 else "collapsed"
+        summary = " ".join(f"{k}x{v}" for k, v in kinds.most_common())
+        print(f"{cell:24s} {f'{hits}/{len(rows)}':>10s} {summary:28s} {peak:6.3f} {final:6.3f}")
 
     print(f"\n{json.dumps(summary['by_status'])}  wall {time.time() - started:.0f}s")
 
@@ -130,6 +147,7 @@ def main() -> int:
     p.add_argument("--manifest-only", action="store_true")
     p.add_argument("--task", default="sort_digits")
     p.add_argument("--steps", type=int, default=400)
+    p.add_argument("--seeds", type=int, default=1, help="seeds per cell; >1 gives collapse RATES")
     p.add_argument("--workers", type=int, default=None)
     p.add_argument("--out", default="corpus")
     p.add_argument("--overwrite", action="store_true")
