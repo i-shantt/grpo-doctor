@@ -27,6 +27,17 @@ from testbed.tasks.sort_digits import SortDigits  # noqa: E402
 pytestmark = pytest.mark.torch
 
 
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path, monkeypatch):
+    """Warm starts are cached to `warmstarts/` relative to the cwd.
+
+    Every test in this module runs in its own temporary directory so the suite neither pollutes the
+    repo nor picks up a checkpoint another test wrote -- a cache hit across tests would make a
+    reproducibility failure invisible.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 def _cfg(**kw) -> RunConfig:
     """Deliberately tiny: these test control flow and bookkeeping, not learning."""
     base = dict(
@@ -112,8 +123,53 @@ def test_run_is_bitwise_reproducible() -> None:
     for ra, rb in zip(a, b, strict=True):
         assert ra.keys() == rb.keys()
         for k in ra:
-            assert ra[k] == pytest.approx(ra[k], nan_ok=True)
+            if k == "warm_start/cached":
+                # Cache-hit bookkeeping, not run behavior: the second run legitimately reports 1.0.
+                # test_cached_and_fresh_runs_are_identical covers that the weights match regardless.
+                continue
             assert (ra[k] == rb[k]) or (np.isnan(ra[k]) and np.isnan(rb[k])), f"{k} diverged"
+
+
+def test_cached_and_fresh_runs_are_identical() -> None:
+    """Caching the warm start must be an optimization, not a change in behavior.
+
+    It holds only because model initialization is the sole consumer of the global torch RNG and
+    sampling draws from an explicitly seeded generator. If either of those ever stops being true,
+    every cached corpus run would silently diverge from its own manifest and this is the test that
+    catches it.
+    """
+    cfg = _cfg(warm_start_steps=3)
+    fresh = list(run(SortDigits(), cfg, cache_dir=None))
+    written = list(run(SortDigits(), cfg))  # populates the cache
+    reused = list(run(SortDigits(), cfg))  # hits it
+
+    assert written[0]["warm_start/cached"] == 0.0
+    assert reused[0]["warm_start/cached"] == 1.0
+    for a, b in zip(fresh, reused, strict=True):
+        for k in a:
+            if k.startswith("warm_start/"):
+                continue
+            assert (a[k] == b[k]) or (np.isnan(a[k]) and np.isnan(b[k])), f"{k} diverged"
+
+
+def test_cache_key_covers_every_input_that_changes_the_weights() -> None:
+    """A key that missed a field would serve one task's checkpoint to another's run."""
+    from testbed.core.warmstart import key_for
+
+    base = _cfg()
+    digest = key_for(SortDigits(), base).digest()
+    for change in (
+        {"difficulty": 5},
+        {"warm_start_steps": 3},
+        {"warm_start_lr": 1e-2},
+        {"d_model": 64},
+        {"n_layer": 2},
+        {"seed": 7},
+        {"n_prompts": 4},
+    ):
+        assert key_for(SortDigits(), _cfg(**change)).digest() != digest, (
+            f"{change} did not change the key"
+        )
 
 
 def test_different_seeds_give_different_runs() -> None:

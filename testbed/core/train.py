@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -32,9 +33,10 @@ import torch
 import torch.nn.functional as F
 
 from testbed.core.grpo import GRPOConfig, compute_advantages, grpo_loss
-from testbed.core.model import ModelConfig, TinyGPT
+from testbed.core.model import TinyGPT
 from testbed.core.optim import InstrumentedAdamW, OptimConfig
 from testbed.core.rollout import generate, score
+from testbed.core.warmstart import DEFAULT_CACHE_DIR, load_or_train
 from testbed.tasks.base import Batch, Task, VerifierConfig, decode
 
 ORACLE_PREFIX = "oracle/"
@@ -204,22 +206,22 @@ def _aggregate(per_iter: list[dict[str, float]]) -> dict[str, float]:
     return out
 
 
-def run(task: Task, cfg: RunConfig) -> Iterator[dict[str, float]]:
+def run(
+    task: Task,
+    cfg: RunConfig,
+    *,
+    cache_dir: Path | str | None = DEFAULT_CACHE_DIR,
+) -> Iterator[dict[str, float]]:
     """Execute one run, yielding a metrics record per optimizer step.
 
     Yields eagerly so a caller can stream to disk and so an auto-halt demo can stop mid-run.
+
+    The warm start is cached by default. Caching cannot change the run: model init is the only
+    consumer of the global torch RNG, sampling draws from an explicitly seeded generator, and the
+    supervised phase is deterministic given the key -- so a cached run and a freshly warm-started
+    one produce byte-identical records. `test_cached_and_fresh_runs_are_identical` holds that.
     """
-    torch.manual_seed(cfg.seed)
-    model = TinyGPT(
-        ModelConfig(
-            vocab_size=task.vocab_size,
-            d_model=cfg.d_model,
-            n_layer=cfg.n_layer,
-            n_head=cfg.n_head,
-            max_seq_len=task.prompt_len + task.max_completion_len + 1,
-        )
-    )
-    warm = warm_start(model, task, cfg)
+    model, warm = load_or_train(task, cfg, cache_dir=cache_dir)
 
     rng = np.random.default_rng(cfg.seed)
     gen = torch.Generator().manual_seed(cfg.seed)
