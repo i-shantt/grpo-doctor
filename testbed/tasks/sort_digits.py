@@ -53,7 +53,9 @@ class SortDigits:
             prompts[i, self.prompt_len - k - 1 : self.prompt_len - 1] = row
             prompts[i, self.prompt_len - 1] = SEP
             problems.append(
-                Problem(prompt=tuple(int(x) for x in row), answer=tuple(sorted(int(x) for x in row)))
+                Problem(
+                    prompt=tuple(int(x) for x in row), answer=tuple(sorted(int(x) for x in row))
+                )
             )
         return Batch(prompts=prompts, problems=tuple(problems))
 

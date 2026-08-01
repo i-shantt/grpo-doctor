@@ -186,7 +186,9 @@ def test_onpolicy_step_reports_clip_metrics_as_unmeasurable_not_zero() -> None:
 
     _, metrics = grpo_loss(logits, ids, mask, adv, None, cfg)
     for key in ("clip_ratio/low_mean", "clip_ratio/high_mean", "importance_ratio/max"):
-        assert metrics[key] != metrics[key], f"{key} should be NaN (unmeasurable), got {metrics[key]}"
+        assert metrics[key] != metrics[key], (
+            f"{key} should be NaN (unmeasurable), got {metrics[key]}"
+        )
 
     # With genuine off-policy logprobs the same keys must become real numbers.
     logprobs = F.log_softmax(logits.float(), -1).gather(-1, ids.unsqueeze(-1)).squeeze(-1)

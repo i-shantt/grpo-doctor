@@ -26,7 +26,7 @@ def test_probe_accepts_only_the_exact_answer() -> None:
     for p in batch.problems:
         assert task.verify_true(p.answer, p) is True
         assert task.verify_true(p.answer[:-1], p) is False  # truncated
-        assert task.verify_true(p.answer + (0,), p) is False  # extended
+        assert task.verify_true((*p.answer, 0), p) is False  # extended
         assert task.verify_true(tuple(reversed(p.answer)), p) is (
             p.answer == tuple(reversed(p.answer))  # only if palindromic
         )
@@ -34,7 +34,7 @@ def test_probe_accepts_only_the_exact_answer() -> None:
 
 def test_no_leak_is_identical_to_the_probe() -> None:
     """The control condition must be exactly the probe, or F0 is not a control."""
-    task, batch, rng = _batch(n=100)
+    task, batch, _ = _batch(n=100)
     cfg = VerifierConfig(leak_level=LeakLevel.NONE)
     candidates = [lambda p: p.answer, lambda p: p.answer[:1], lambda p: (0,), lambda p: ()]
     for p in batch.problems:
@@ -135,7 +135,9 @@ def test_decode_truncates_at_first_eos() -> None:
 def test_sampled_prompts_are_rectangular_and_sep_terminated() -> None:
     task, batch, _ = _batch(n=64, difficulty=4)
     assert batch.prompts.shape == (64, task.prompt_len)
-    assert np.all(batch.prompts[:, -1] == SEP), "SEP must be the final prompt token at every difficulty"
+    assert np.all(batch.prompts[:, -1] == SEP), (
+        "SEP must be the final prompt token at every difficulty"
+    )
 
 
 def test_difficulty_controls_answer_length() -> None:

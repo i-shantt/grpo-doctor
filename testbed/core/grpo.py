@@ -223,18 +223,19 @@ def grpo_loss(
         seq_loss = (per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
         loss = seq_loss.mean()
     elif cfg.loss_type == "dr_grpo":
-        loss = (per_token_loss * mask).sum() / (
-            per_token_loss.size(0) * cfg.max_completion_length
-        )
+        loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * cfg.max_completion_length)
     elif cfg.loss_type == "dapo":
         loss = (per_token_loss * mask).sum() / n_tokens
     else:
         raise ValueError(f"unknown loss_type: {cfg.loss_type!r}")
 
     if cfg.entropy_coef != 0.0:
-        loss = loss - cfg.entropy_coef * (
-            -(logprobs_all.exp() * logprobs_all).sum(-1) * mask
-        ).sum() / n_tokens
+        loss = (
+            loss
+            - cfg.entropy_coef
+            * (-(logprobs_all.exp() * logprobs_all).sum(-1) * mask).sum()
+            / n_tokens
+        )
 
     with torch.no_grad():
         metrics: dict[str, float] = {

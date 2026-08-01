@@ -40,9 +40,7 @@ def test_scoring_reproduces_sampling_logprobs() -> None:
     """
     model = _model()
     gen = torch.Generator().manual_seed(3)
-    roll = generate(
-        model, _prompts(), max_new_tokens=10, eos_id=EOS, pad_id=PAD, generator=gen
-    )
+    roll = generate(model, _prompts(), max_new_tokens=10, eos_id=EOS, pad_id=PAD, generator=gen)
 
     logits = score(model, roll)
     lp = F.log_softmax(logits.float(), -1)
@@ -109,7 +107,9 @@ def test_generation_is_deterministic_given_a_seed() -> None:
     outs = []
     for _ in range(2):
         gen = torch.Generator().manual_seed(11)
-        outs.append(generate(model, _prompts(), max_new_tokens=8, eos_id=EOS, pad_id=PAD, generator=gen))
+        outs.append(
+            generate(model, _prompts(), max_new_tokens=8, eos_id=EOS, pad_id=PAD, generator=gen)
+        )
     assert torch.equal(outs[0].completion_ids, outs[1].completion_ids)
     torch.testing.assert_close(outs[0].logprobs, outs[1].logprobs, rtol=0, atol=0)
 
@@ -123,8 +123,13 @@ def test_sampler_noise_creates_a_behavior_policy_gap() -> None:
     model = _model()
     gen = torch.Generator().manual_seed(9)
     roll = generate(
-        model, _prompts(), max_new_tokens=8, eos_id=EOS, pad_id=PAD,
-        sampler_noise=0.5, generator=gen,
+        model,
+        _prompts(),
+        max_new_tokens=8,
+        eos_id=EOS,
+        pad_id=PAD,
+        sampler_noise=0.5,
+        generator=gen,
     )
     lp = F.log_softmax(score(model, roll).float(), -1)
     recomputed = lp.gather(-1, roll.completion_ids.unsqueeze(-1)).squeeze(-1).detach()
@@ -141,8 +146,13 @@ def test_temperature_mismatch_would_bias_the_ratio() -> None:
     model = _model()
     gen = torch.Generator().manual_seed(12)
     roll = generate(
-        model, _prompts(), max_new_tokens=8, eos_id=EOS, pad_id=PAD,
-        temperature=1.3, generator=gen,
+        model,
+        _prompts(),
+        max_new_tokens=8,
+        eos_id=EOS,
+        pad_id=PAD,
+        temperature=1.3,
+        generator=gen,
     )
     m = roll.completion_mask > 0
 
