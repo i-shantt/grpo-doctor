@@ -64,7 +64,13 @@ class VerifierConfig:
 class Problem:
     prompt: tuple[int, ...]
     answer: tuple[int, ...]
-    """The unique correct completion, excluding EOS."""
+    """A canonical correct completion, excluding EOS.
+
+    Canonical rather than unique: `countdown_lite` problems admit several valid selections, and its
+    `verify_true` checks the constraint rather than comparing strings. This field is what warm-start
+    SFT is trained on and what `PREFIX` leaks are measured against; **`verify_true` is the
+    definition of correctness**, not this.
+    """
 
 
 @dataclass(frozen=True)
