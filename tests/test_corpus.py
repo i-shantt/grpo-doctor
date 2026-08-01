@@ -140,8 +140,10 @@ def test_negative_classes_are_densely_sampled() -> None:
     for h in ("H2", "H3", "H4", "H5"):
         assert min(v for (_, f, _), v in per_cell.items() if f == h) >= 10
 
+    # F0 is the only family that is negative by construction; H2-H5 are *intended* negatives whose
+    # actual labels are decided afterwards from held-out accuracy, and some of them will collapse.
     negatives = sum(1 for s in grid if s.family in {"F0", "H2", "H3", "H4", "H5"})
-    assert negatives / len(grid) >= 0.30, "too few guaranteed negatives to calibrate a 5% FAR"
+    assert negatives / len(grid) >= 0.30, "too few expected negatives to calibrate a 5% FAR"
 
 
 def test_all_runs_are_the_same_length() -> None:

@@ -21,6 +21,11 @@ The hard-negative families H2-H5 live here too, and they matter more than the fa
 the headline number. A false-alarm rate measured only against clean, successful runs is measured
 against the easy case; the budget is really spent on plateaus, which look exactly like starvation
 until they resolve.
+
+They are *intended* negatives, not guaranteed ones. H3 at its chosen dose leaves about 60% of runs
+healthy and genuinely degrades the rest, and that ambiguity is the point -- a hard negative that
+never gets close to collapsing is not hard. As everywhere else here, the label comes from held-out
+accuracy afterwards and an H-family run that really did collapse is counted as a positive.
 """
 
 from __future__ import annotations
@@ -80,7 +85,7 @@ FAILURES: tuple[FailureSpec, ...] = (
     # the null dose is mu=2 rather than mu=1.
     FailureSpec("F3", "mu4", {"grpo.num_iterations": 4}),
     FailureSpec("F3", "mu8", {"grpo.num_iterations": 8}),
-    FailureSpec("F3", "mu8_hot", {"grpo.num_iterations": 8, "optim.lr": 1e-3}),
+    FailureSpec("F3", "mu8_hot", {"grpo.num_iterations": 8, "optim.lr": 5e-4}),
     # F4 entropy collapse. Narrow clipping plus a cold sampler removes exploration without any
     # single setting looking obviously wrong.
     FailureSpec("F4", "narrow_clip", {"grpo.epsilon_low": 0.05, "grpo.epsilon_high": 0.05}),
@@ -111,15 +116,19 @@ FAILURES: tuple[FailureSpec, ...] = (
 )
 
 HARD_NEGATIVES: tuple[FailureSpec, ...] = (
-    # H2 plateau. The important one. Flat reward, high zero-variance fraction, falling entropy --
-    # indistinguishable from starvation collapse until it resolves. This is where the false-alarm
-    # budget is actually spent, and an aggregate FAR that hides 40% false alarms here is
-    # meaningless, so FAR is always broken out by hard-negative type.
-    FailureSpec("H2", "plateau", {"difficulty": 6, "optim.lr": 5e-5}, needs_onset=False),
-    # H3 noisy but recovering: a real dip that comes back, which the persistence window must absorb.
-    FailureSpec("H3", "dip", {"optim.lr": 3e-3}),
-    # H4 slow but healthy: improving the whole way, just far below the median rate.
-    FailureSpec("H4", "slow", {"optim.lr": 1e-4}, needs_onset=False),
+    # H2 plateau. The important one. Learning simply stops: flat reward, high zero-variance
+    # fraction, nothing improving -- indistinguishable from starvation collapse except that nothing
+    # is actually lost. This is where the false-alarm budget is really spent, and an aggregate FAR
+    # that hides 40% false alarms here would be meaningless, so FAR is broken out by type.
+    FailureSpec("H2", "plateau", {"optim.lr": 1e-6}),
+    # H3 noisy but recovering. 2e-4 measured a mean max drawdown of 0.205 with 60% of runs still
+    # ending healthy -- a genuinely ambiguous condition rather than a disguised catastrophe. The
+    # previous value here was 3e-3, which did not produce a dip at all: every run went to 0.000
+    # final accuracy, making it a failure family wearing a hard negative's name.
+    FailureSpec("H3", "dip", {"optim.lr": 2e-4}),
+    # H4 slow but healthy: improving the whole way, just far below the median rate. Below the new
+    # 5e-5 default, since that default is now itself the stable setting.
+    FailureSpec("H4", "slow", {"optim.lr": 1e-5}, needs_onset=False),
     # H5 legitimate length growth. Rewards longer *correct* answers, so length rises with accuracy
     # rather than against it -- the case that must not fire the length baseline.
     FailureSpec("H5", "longer", {"verifier.length_bonus": 0.02}),
