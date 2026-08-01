@@ -68,6 +68,12 @@ class TaskProfile:
 
     task: str
     difficulty: int
+    """Fixed probe difficulty -- the measuring stick, held constant for the whole run."""
+
+    difficulty_range: tuple[int, int]
+    """Training difficulties, drawn per step. Must contain `difficulty`, or the probe would measure
+    something the policy is never trained on."""
+
     warm_start_steps: int
     """Ceiling. Generous, since overshooting costs only time and stopping is governed by the probe."""
 
@@ -77,15 +83,15 @@ class TaskProfile:
 
 
 PROFILES: tuple[TaskProfile, ...] = (
-    TaskProfile("sort_digits", 6, 1000, 0.344),
-    TaskProfile("countdown_lite", 3, 3000, 0.445),
+    TaskProfile("sort_digits", 6, (3, 8), 2500, 0.344),
+    TaskProfile("countdown_lite", 3, (2, 5), 4000, 0.445),
     # Steep between 1000 and 2500 steps (0.277 -> 0.906), which is exactly why the stopping rule
     # is a probe crossing rather than a step count.
-    TaskProfile("ca_rule", 6, 4000, 0.277),
+    TaskProfile("ca_rule", 6, (4, 8), 6000, 0.277),
     # Groks: 0.105 at 2500 steps, 1.000 at 7000, and non-monotone inside the usable window
     # (0.406 at 5000, 0.309 at 6000). The ceiling sits past the transition so every seed reaches
     # the band wherever its own transition happens to fall.
-    TaskProfile("modarith", 3, 9000, 0.406),
+    TaskProfile("modarith", 3, (2, 5), 12000, 0.406),
 )
 
 PROFILE_BY_TASK = {p.task: p for p in PROFILES}
@@ -104,6 +110,7 @@ class RunSpec:
     difficulty: int
     warm_start_steps: int
     warm_start_target: tuple[float, float] | None
+    difficulty_range: tuple[int, int] | None
     onset_step: int | None
     overrides: dict[str, Any]
     simulated: bool = False
@@ -137,6 +144,9 @@ def build_config(spec: RunSpec) -> RunConfig:
         steps=spec.steps,
         n_prompts=spec.n_prompts,
         difficulty=spec.difficulty,
+        difficulty_range=(
+            tuple(spec.difficulty_range) if spec.difficulty_range else None  # type: ignore[arg-type]
+        ),
         warm_start_steps=spec.warm_start_steps,
         warm_start_target=(
             tuple(spec.warm_start_target) if spec.warm_start_target else None  # type: ignore[arg-type]
@@ -209,6 +219,7 @@ def make_grid(
                         difficulty=profile.difficulty,
                         warm_start_steps=profile.warm_start_steps,
                         warm_start_target=TARGET_BAND,
+                        difficulty_range=profile.difficulty_range,
                         onset_step=onset,
                         overrides=dict(spec.overrides),
                         simulated=spec.simulated,

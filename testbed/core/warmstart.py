@@ -66,6 +66,9 @@ class WarmStartKey:
     """Also part of the key: it sets the granularity of the stopping rule, so a run that probes
     every 50 steps stops at a different point than one probing every 200."""
 
+    difficulty_range: tuple[int, int] | None = None
+    """The warm start trains over this range, so it determines the weights directly."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "task": self.task,
@@ -81,6 +84,7 @@ class WarmStartKey:
             "seed": self.seed,
             "target": list(self.target) if self.target else None,
             "target_probe_every": self.target_probe_every,
+            "difficulty_range": list(self.difficulty_range) if self.difficulty_range else None,
         }
 
     def digest(self) -> str:
@@ -106,6 +110,7 @@ def key_for(task: Task, cfg: RunConfig) -> WarmStartKey:
         seed=cfg.seed,
         target=cfg.warm_start_target,
         target_probe_every=cfg.warm_start_probe_every,
+        difficulty_range=cfg.difficulty_range,
     )
 
 

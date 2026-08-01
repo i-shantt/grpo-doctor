@@ -54,6 +54,7 @@ def _tiny(**kw) -> RunSpec:
         difficulty=4,
         warm_start_steps=2,
         warm_start_target=None,
+        difficulty_range=None,
         onset_step=None,
         overrides={},
         n_prompts=2,
@@ -82,6 +83,26 @@ def test_every_grid_run_warm_starts_to_the_target_band() -> None:
     for spec in make_grid(tasks=("ca_rule",), seeds=1):
         assert spec.warm_start_target == TARGET_BAND
         assert build_config(spec).warm_start_target == TARGET_BAND
+
+
+def test_the_probe_difficulty_is_inside_the_training_range() -> None:
+    """The probe is the fixed measuring stick. If it sat outside the training range it would be
+    measuring something the policy is never trained on, and every accuracy would be a
+    generalization number rather than a performance one."""
+    for p in PROFILES:
+        lo, hi = p.difficulty_range
+        assert lo <= p.difficulty <= hi, f"{p.task}: probe at {p.difficulty}, trains on {lo}-{hi}"
+
+
+def test_difficulty_families_narrow_the_range_rather_than_pinning_a_value() -> None:
+    """Setting a single difficulty mid-run is a change of prompt shape, not of difficulty: it drove
+    reward to exactly 0.000 for difficulty 2 and difficulty 8 alike, making F1 and F2 identical."""
+    from testbed.inject.failures import ALL_SPECS as SPECS
+
+    for spec in SPECS:
+        assert "difficulty" not in spec.overrides, (
+            f"{spec.cell} pins a single difficulty; use difficulty_range"
+        )
 
 
 def test_the_ceiling_sits_past_each_task_grokking_point() -> None:

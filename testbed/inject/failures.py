@@ -73,14 +73,18 @@ FAILURES: tuple[FailureSpec, ...] = (
     HEALTHY,
     # F1 difficulty starvation: nothing is solvable, every group agrees on failure, and the
     # gradient goes to exactly zero. Silent death, not explosion.
-    FailureSpec("F1", "mild", {"difficulty": 7}),
-    FailureSpec("F1", "strong", {"difficulty": 8}),
+    #
+    # These narrow the *training* range rather than setting a single difficulty. Setting one used
+    # to send reward to exactly 0.000 in both directions -- difficulty 2 broke the policy as
+    # thoroughly as difficulty 8 -- because the change was in prompt shape, not in difficulty.
+    FailureSpec("F1", "mild", {"difficulty_range": (7, 8)}),
+    FailureSpec("F1", "strong", {"difficulty_range": (8, 8), "temperature": 0.5}),
     FailureSpec("F1", "cold", {"temperature": 0.3}),
     # F2 saturation: zero variance from the *success* side. Included because it produces the same
     # zero-variance reading as F1 while being the opposite situation, which is exactly why raw ACR
     # is worthless as a level and has to be split into starvation and mastery.
-    FailureSpec("F2", "easy", {"difficulty": 2}),
-    FailureSpec("F2", "hot_easy", {"difficulty": 3, "temperature": 0.5}),
+    FailureSpec("F2", "easy", {"difficulty_range": (3, 3)}),
+    FailureSpec("F2", "hot_easy", {"difficulty_range": (3, 4), "temperature": 0.5}),
     # F3 off-policy ratio blowup. mu>=2 is required for any clipping signal to exist at all, so
     # the null dose is mu=2 rather than mu=1.
     FailureSpec("F3", "mu4", {"grpo.num_iterations": 4}),

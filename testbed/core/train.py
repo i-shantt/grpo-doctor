@@ -59,6 +59,24 @@ class RunConfig:
     """Prompts per optimizer step. The rollout batch is n_prompts * group_size sequences."""
 
     difficulty: int = 6
+    """The difficulty the **probe** always uses. Training difficulty comes from
+    `difficulty_range`."""
+
+    difficulty_range: tuple[int, int] | None = None
+    """Inclusive range of training difficulties, drawn afresh each step.
+
+    Training on a single difficulty makes `difficulty` unusable as a failure knob, and the bug it
+    caused is worth recording. With a policy warm-started only on 6-digit problems, injecting
+    difficulty 2 -- *easier* -- drove reward to exactly 0.000 and the degenerate-group fraction to
+    1.00, identical to injecting difficulty 8. Both directions broke the policy equally, because
+    what changed was not the difficulty but the shape of the input: a different number of prompt
+    tokens, a different pad pattern, and a different answer length, none of which it had ever seen.
+    F1 (starvation) and F2 (saturation) were producing byte-identical traces as a result.
+
+    Training over a range makes difficulty a real axis. Narrowing the range then genuinely means
+    harder or easier problems rather than an out-of-distribution prompt format.
+    """
+
     temperature: float = 1.0
     sampler_noise: float = 0.0
 
@@ -116,6 +134,14 @@ def apply_overrides(cfg: RunConfig, overrides: dict[str, Any]) -> RunConfig:
         else:
             out = replace(out, **{head: value})
     return out
+
+
+def draw_difficulty(cfg: RunConfig, rng: np.random.Generator) -> int:
+    """Training difficulty for one step. Fixed at `cfg.difficulty` when no range is configured."""
+    if cfg.difficulty_range is None:
+        return cfg.difficulty
+    lo, hi = cfg.difficulty_range
+    return int(rng.integers(lo, hi + 1))
 
 
 def strip_oracle(record: dict[str, float]) -> dict[str, float]:
@@ -178,7 +204,11 @@ def warm_start(model: TinyGPT, task: Task, cfg: RunConfig) -> dict[str, float]:
     used = 0
 
     for step in range(max_steps):
-        batch = task.sample(cfg.n_prompts * cfg.grpo.group_size, cfg.difficulty, rng, "train")
+        # Same difficulty distribution the RL phase will see, so the policy is never surprised by
+        # a prompt shape at onset that it was not trained on.
+        batch = task.sample(
+            cfg.n_prompts * cfg.grpo.group_size, draw_difficulty(cfg, rng), rng, "train"
+        )
         prompts = torch.from_numpy(batch.prompts)
         tgt_np, mask_np = _completion_targets(task, batch, width)
         tgt = torch.from_numpy(tgt_np)
@@ -304,7 +334,7 @@ def run(
             if active.optim != cfg.optim:
                 opt = InstrumentedAdamW(model, active.optim)
 
-        batch = task.sample(cfg.n_prompts, active.difficulty, rng, "train")
+        batch = task.sample(cfg.n_prompts, draw_difficulty(active, rng), rng, "train")
         prompts = torch.from_numpy(batch.prompts).repeat_interleave(g, dim=0)
 
         model.train()
