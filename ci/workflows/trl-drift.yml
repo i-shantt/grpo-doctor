@@ -1,0 +1,106 @@
+name: trl-drift
+
+# TRL shipped nine releases in two months. This project asserts specific things about its
+# internals -- that `nanstd` applies Bessel's correction (which sets the advantage bound), that
+# `log()` averages and clears `_metrics` (which is why logging_steps=1 is mandatory), and that
+# `old_per_token_logps is None` at num_iterations=1 (which is why the clip signals are NaN rather
+# than 0.0). Each of those is a claim about someone else's code that can quietly stop being true.
+#
+# So this runs weekly against trl@main and opens an issue when it breaks, rather than waiting for
+# a user to discover that a calibration was fitted against behavior that no longer exists.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: install trl from main
+        run: |
+          pip install -e .
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install "trl @ git+https://github.com/huggingface/trl.git@main"
+          pip install pytest
+
+      - name: assumptions we make about TRL internals
+        id: check
+        run: |
+          python - <<'PY'
+          import inspect, sys
+          import torch
+          failures = []
+
+          # 1. nanstd applies Bessel's correction. This sets the advantage bound to (G-1)/sqrt(G)
+          #    = 2.4749 at G=8, not sqrt(G-1) = 2.6458. The README states the first.
+          try:
+              from trl.trainer.utils import nanstd
+              x = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+              got, unbiased = float(nanstd(x, dim=1)), float(x.std(dim=1))
+              if abs(got - unbiased) > 1e-6:
+                  failures.append(f"nanstd is no longer the unbiased std: {got} vs {unbiased}")
+          except Exception as e:
+              failures.append(f"could not import/inspect nanstd: {e}")
+
+          # 2. GRPOTrainer.log still averages and clears _metrics, which is the entire reason
+          #    logging_steps=1 is a hard requirement.
+          try:
+              from trl import GRPOTrainer
+              src = inspect.getsource(GRPOTrainer.log)
+              if "clear()" not in src:
+                  failures.append("GRPOTrainer.log no longer clears _metrics; revisit logging_steps=1")
+          except Exception as e:
+              failures.append(f"could not inspect GRPOTrainer.log: {e}")
+
+          # 3. The on-policy branch still exists: old_per_token_logps is None at num_iterations=1.
+          try:
+              from trl import GRPOTrainer
+              src = inspect.getsource(GRPOTrainer)
+              if "old_per_token_logps" not in src:
+                  failures.append("old_per_token_logps is gone; the mu=1 NaN-vs-zero story needs revisiting")
+          except Exception as e:
+              failures.append(f"could not inspect GRPOTrainer: {e}")
+
+          # 4. Every log key the monitor maps still appears in the trainer source.
+          try:
+              from grpo_doctor.record import TRL_KEY_MAP
+              from trl import GRPOTrainer
+              src = inspect.getsource(GRPOTrainer)
+              missing = [k for k in TRL_KEY_MAP if k not in src and "/" in k]
+              if missing:
+                  failures.append(f"log keys no longer present in GRPOTrainer: {missing}")
+          except Exception as e:
+              failures.append(f"could not check key map: {e}")
+
+          for f in failures:
+              print("DRIFT:", f)
+          open("drift.txt", "w").write("\n".join(failures))
+          sys.exit(1 if failures else 0)
+          PY
+
+      - name: open an issue on drift
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = "trl@main no longer matches assumptions grpo-doctor relies on.\n\n";
+            try { body += "```\n" + fs.readFileSync('drift.txt', 'utf8') + "\n```\n"; } catch (e) {}
+            body += `\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: "TRL drift detected on main",
+              body,
+              labels: ["trl-drift"],
+            });

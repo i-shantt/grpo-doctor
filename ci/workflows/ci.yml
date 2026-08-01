@@ -1,0 +1,85 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ruff mypy numpy
+      - run: ruff check src/ testbed/ tests/ scripts/
+      - run: ruff format --check src/ testbed/ tests/ scripts/
+      # --strict on the shipped package only. integrations/ is excluded in pyproject because it
+      # touches untyped third-party code, and the testbed is research code, not a library.
+      - run: mypy --strict src/grpo_doctor
+
+  unit:
+    # The point of this matrix is the *install line*: `pip install -e .` with no extras. If the
+    # shipped monitor ever grows a dependency on torch, this job is what fails, and it fails
+    # everywhere at once. grpo-doctor is meant to be installed into someone's training image,
+    # where dragging in a second torch would be a non-starter.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install -e . pytest
+      - name: numpy-only test suite
+        run: pytest tests/ -q -m "not torch and not trl" --durations=5
+      - name: the package must not import torch
+        run: |
+          python - <<'PY'
+          import sys, grpo_doctor
+          from grpo_doctor import Monitor, StepRecord
+          Monitor().update(StepRecord(step=0, reward_mean=0.5))
+          assert "torch" not in sys.modules, "grpo-doctor pulled in torch"
+          print("clean:", grpo_doctor.__version__)
+          PY
+
+  testbed:
+    # The research code, which does need torch. CPU wheel only -- no GPU is ever used in CI, and
+    # the corpus itself was generated on CPU.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[torch,dev]" --extra-index-url https://download.pytorch.org/whl/cpu
+      - run: pytest tests/ -q --durations=10
+
+  guarantees:
+    # The three properties the whole project rests on, run as their own job so a failure here is
+    # never buried among ordinary test output. If any of these break, every lead time the project
+    # reports is meaningless rather than merely wrong.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e . pytest
+      - name: causality, blindness, constant memory
+        run: |
+          pytest tests/test_monitor_structural.py -q \
+            -k "prefix_replay or oracle or constant_memory or container or history" \
+            --durations=0
+      - name: the labeler must not read the manifest
+        run: pytest tests/test_labels.py -q
