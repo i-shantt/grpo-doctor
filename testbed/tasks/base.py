@@ -152,14 +152,21 @@ def apply_leak(
     so under a leaky verifier the bonus compounds the exploit rather than fighting it -- which is
     what happens in real setups that stack shaping terms on a proxy.
     """
-    if cfg.leak_level is LeakLevel.NONE:
+    # Coerced, not compared with `is`. LeakLevel is a str enum, so a manifest that has been through
+    # JSON arrives carrying the plain string "prefix" rather than LeakLevel.PREFIX. Identity
+    # comparison then falls through to the raise below, and every F5 run reproduced from a released
+    # manifest crashes -- which is exactly the path a third party reproducing the corpus takes,
+    # while the in-process path used to generate it works fine.
+    level = LeakLevel(cfg.leak_level)
+
+    if level is LeakLevel.NONE:
         accepted = exact
-    elif cfg.leak_level is LeakLevel.PREFIX:
+    elif level is LeakLevel.PREFIX:
         n = len(completion)
         accepted = n > 0 and completion == problem.answer[:n]
-    elif cfg.leak_level is LeakLevel.STRUCTURE:
+    elif level is LeakLevel.STRUCTURE:
         accepted = structure_ok
-    elif cfg.leak_level is LeakLevel.FORMAT:
+    elif level is LeakLevel.FORMAT:
         accepted = format_ok
     else:
         raise ValueError(f"unknown leak level: {cfg.leak_level!r}")

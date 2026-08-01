@@ -12,6 +12,7 @@ adversary supplied by the thing it attacks proves nothing.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import numpy as np
@@ -321,3 +322,23 @@ def _subsets(source: tuple[int, ...]) -> list[tuple[int, ...]]:
     for x in source:
         out += [(*s, x) for s in out]
     return [s for s in out if s]
+
+
+def test_leak_level_survives_a_json_round_trip() -> None:
+    """LeakLevel is a str enum, so a manifest that has been through JSON carries the plain string
+    "prefix" rather than LeakLevel.PREFIX.
+
+    Identity comparison then fell through to a raise, meaning every F5 run reproduced *from a
+    released manifest* crashed while the in-process path used to generate the corpus worked fine --
+    a bug visible only to someone else reproducing the work.
+    """
+    task = SortDigits()
+    batch = task.sample(50, 6, np.random.default_rng(0))
+    for level in LeakLevel:
+        as_enum = VerifierConfig(leak_level=level)
+        as_str = VerifierConfig(leak_level=json.loads(json.dumps(level.value)))
+        for p in batch.problems[:10]:
+            for completion in (p.answer, p.answer[:1], (7,)):
+                assert task.verify_train(completion, p, as_enum) == task.verify_train(
+                    completion, p, as_str
+                )

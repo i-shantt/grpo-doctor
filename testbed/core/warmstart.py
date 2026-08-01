@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -164,9 +165,18 @@ def load_or_train(
     directory.mkdir(parents=True, exist_ok=True)
     # Write through a temporary name so a killed process cannot leave a truncated checkpoint that
     # every later run would silently load.
-    tmp = ckpt.with_suffix(".pt.tmp")
-    torch.save({"model": model.state_dict(), "info": info}, tmp)
-    tmp.replace(ckpt)
+    #
+    # The pid is in the name because the corpus runs across processes and two workers hitting the
+    # same uncached key concurrently is the common case, not the rare one -- every failure family
+    # at a given seed shares one warm start. With a shared temporary name both wrote to the same
+    # file and the second `replace` died with FileNotFoundError, losing the run. Observed twice in
+    # a 38-run sweep at six workers.
+    tmp = ckpt.with_suffix(f".pt.tmp{os.getpid()}")
+    try:
+        torch.save({"model": model.state_dict(), "info": info}, tmp)
+        tmp.replace(ckpt)
+    finally:
+        tmp.unlink(missing_ok=True)
     meta.write_text(json.dumps({**key.to_dict(), **info}, indent=1, sort_keys=True))
     return model, {**info, "warm_start/cached": 0.0}
 
