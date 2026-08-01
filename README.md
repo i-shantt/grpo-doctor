@@ -60,11 +60,25 @@ identically 1 and `clip_ratio/low_mean == clip_ratio/high_mean == 0.0` for the e
 reading those keys is reading a constant column and calling it healthy. `grpo-doctor` detects this
 and marks the signal *unavailable* rather than *nominal*.
 
-**3. Entropy moves in opposite directions for different collapse types.**
-In a catastrophic off-policy run entropy **rose** (0.427 → 0.446) as reward died; in a
-reward-hacking run entropy also **rose** (0.355 → 0.532) while reward hit 1.000. Meanwhile entropy
-falling steadily is what a *healthy* run looks like. Any single-sided entropy threshold is wrong
-about half the time.
+**3. Falling entropy is what health looks like. Collapse comes with entropy going *up*.**
+The intuition to watch for "entropy collapse" points the wrong way. Across 77 runs on the testbed,
+comparing mean entropy just before the injection against the last 50 steps:
+
+| | runs | mean Δ entropy | mean Δ held-out accuracy |
+|---|---|---|---|
+| healthy controls | 15 | **−0.149** | +0.382 |
+| runs that collapsed | 3 | **+0.108** | −0.371 |
+
+Every healthy run lost entropy, and every collapsed run gained it. So a monitor thresholding on
+"entropy is dropping" would flag its healthiest runs and miss every real failure — it is not merely
+unreliable, it is anti-correlated. This is why the entropy signal here is `Δreward` *per unit of
+entropy spent* rather than a level or a slope: the pathology is paying entropy and getting nothing
+back, not the paying itself.
+
+Three collapsed runs is a thin sample and this is a Phase-1 measurement, not the headline; it gets
+re-derived on the full corpus with cluster-bootstrap intervals. It already contradicts what this
+README previously claimed on the basis of two ad-hoc runs, which is the reason the number is
+reported with its `n` attached.
 
 ## How it is validated
 
