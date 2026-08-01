@@ -18,8 +18,10 @@ import numpy as np
 from testbed.tasks.base import (
     Batch,
     Problem,
+    Split,
     VerifierConfig,
     apply_leak,
+    is_probe_prompt,
     maybe_flip,
 )
 
@@ -39,24 +41,35 @@ class SortDigits:
         # +1 for EOS.
         self.max_completion_len = max_digits + 1
 
-    def sample(self, n: int, difficulty: int, rng: np.random.Generator) -> Batch:
-        """`difficulty` is the number of digits to sort."""
+    def sample(
+        self, n: int, difficulty: int, rng: np.random.Generator, split: Split = "train"
+    ) -> Batch:
+        """`difficulty` is the number of digits to sort.
+
+        `split` partitions the prompt space by hash, so the probe set can never be trained on.
+        Note that at difficulty 2 the space is only 100 prompts and the probe bucket holds ~6, so a
+        256-problem probe draws with heavy replacement and its effective sample size is far below
+        256. Corpus runs use difficulty >= 4 (10k+ prompts) for that reason.
+        """
         k = int(np.clip(difficulty, 2, self.max_digits))
-        digits = rng.integers(0, 10, size=(n, k))
+        rows: list[tuple[int, ...]] = []
+        while len(rows) < n:
+            chunk = rng.integers(0, 10, size=(max(2 * n, 64), k))
+            for raw in chunk:
+                row = tuple(int(x) for x in raw)
+                if split == "any" or is_probe_prompt(row) == (split == "probe"):
+                    rows.append(row)
+                    if len(rows) == n:
+                        break
 
         prompts = np.full((n, self.prompt_len), PAD, dtype=np.int64)
         problems = []
-        for i in range(n):
-            row = digits[i]
+        for i, row in enumerate(rows):
             # Left-pad so the SEP is always the final prompt token, which keeps the position of the
             # "start generating" cue constant across difficulties.
             prompts[i, self.prompt_len - k - 1 : self.prompt_len - 1] = row
             prompts[i, self.prompt_len - 1] = SEP
-            problems.append(
-                Problem(
-                    prompt=tuple(int(x) for x in row), answer=tuple(sorted(int(x) for x in row))
-                )
-            )
+            problems.append(Problem(prompt=row, answer=tuple(sorted(row))))
         return Batch(prompts=prompts, problems=tuple(problems))
 
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:

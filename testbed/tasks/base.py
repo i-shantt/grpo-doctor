@@ -15,9 +15,10 @@ audit exists to catch it before any corpus is generated.
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -74,6 +75,26 @@ class Batch:
     problems: tuple[Problem, ...]
 
 
+Split = Literal["train", "probe", "any"]
+
+PROBE_DENOM = 16
+"""One prompt in 16 is reserved for the held-out probe, by a hash of the prompt itself."""
+
+
+def is_probe_prompt(prompt: tuple[int, ...]) -> bool:
+    """Assign a prompt to the probe split deterministically, from its content alone.
+
+    Sampling a probe set with a different RNG seed makes it *probably* disjoint from training;
+    hashing makes it disjoint by construction, for every run, without tracking any state. That
+    matters because `t_collapse` is defined on this probe: if a probe prompt were also trained on,
+    the measured drop would understate the real one and the label would be quietly wrong.
+
+    `zlib.crc32` rather than `hash()`, which is salted per process and would put the same prompt in
+    different splits in different corpus workers.
+    """
+    return zlib.crc32(np.asarray(prompt, dtype=np.int64).tobytes()) % PROBE_DENOM == 0
+
+
 @runtime_checkable
 class Task(Protocol):
     name: str
@@ -83,7 +104,9 @@ class Task(Protocol):
     prompt_len: int
     max_completion_len: int
 
-    def sample(self, n: int, difficulty: int, rng: np.random.Generator) -> Batch: ...
+    def sample(
+        self, n: int, difficulty: int, rng: np.random.Generator, split: Split = "train"
+    ) -> Batch: ...
 
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:
         """The strict, never-leaky verdict. Labeling only -- never a reward."""

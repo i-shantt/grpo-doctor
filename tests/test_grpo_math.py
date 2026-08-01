@@ -209,6 +209,29 @@ def test_onpolicy_ratio_is_exactly_one() -> None:
     assert metrics["clip_ratio/region_mean"] == 0.0
 
 
+def test_loss_has_a_gradient_at_mu1() -> None:
+    """The bug this exists to prevent: a mu=1 run that silently trains nothing.
+
+    At mu=1 there are no stored old log-probs, so the ratio must be built as
+    exp(logp - logp.detach()) -- numerically 1, but with d/dtheta = dlogp. Constructing it with
+    `torch.ones_like` gives the identical number and no grad_fn, which detaches the loss from the
+    policy entirely. Nothing raises, nothing looks wrong in the metrics, and every weight stays
+    exactly where it started. Caught by tests/test_train.py, pinned here at the source.
+    """
+    logits, ids, mask, _, rewards = _batch(5)
+    logits = logits.detach().requires_grad_(True)
+    cfg = GRPOConfig(group_size=4)
+    adv, _ = compute_advantages(rewards, cfg)
+
+    loss, metrics = grpo_loss(logits, ids, mask, adv, None, cfg)
+    assert loss.requires_grad, "mu=1 loss must stay attached to the policy"
+    loss.backward()
+    assert logits.grad is not None and float(logits.grad.abs().sum()) > 0.0
+
+    # ...while the ratio is still exactly 1, so the clip metrics remain unmeasurable.
+    assert metrics["importance_ratio/max"] != metrics["importance_ratio/max"]
+
+
 def test_trl_std_is_unbiased() -> None:
     """Guards the correction that produced the bound in the README.
 

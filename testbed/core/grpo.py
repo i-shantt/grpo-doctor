@@ -204,14 +204,19 @@ def grpo_loss(
         token_entropy = -(logprobs_all.exp() * logprobs_all).sum(-1)  # (B, T)
         mean_entropy = float((token_entropy * mask).sum() / n_tokens)
 
+    # At mu=1 the rollout policy *is* the current policy, so TRL substitutes
+    # `per_token_logps.detach()` for the missing old log-probs. That is not a convenience: the ratio
+    # must be numerically 1 while still carrying a gradient, since d/dtheta exp(logp - const) =
+    # exp(0) * dlogp = dlogp. Using `ones_like` here instead gives the same number with no grad_fn,
+    # which silently detaches the loss from the policy and makes the entire run a no-op. We shipped
+    # exactly that bug for one commit; `test_loss_has_a_gradient_at_mu1` is why it did not survive.
     if old_logprobs is None:
-        ratio = torch.ones_like(logprobs)
-        log_ratio = torch.zeros_like(logprobs)
+        log_ratio = logprobs - logprobs.detach()
         measurable = False
     else:
         log_ratio = logprobs - old_logprobs
-        ratio = log_ratio.exp()
         measurable = True
+    ratio = log_ratio.exp()
 
     adv = advantages.unsqueeze(1)  # (B, 1) broadcast over tokens
     unclipped = ratio * adv
