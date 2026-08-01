@@ -167,7 +167,15 @@ def warm_start(model: TinyGPT, task: Task, cfg: RunConfig) -> dict[str, float]:
 
 @torch.no_grad()
 def evaluate_probe(model: TinyGPT, task: Task, cfg: RunConfig) -> float:
-    """Held-out accuracy under `verify_true`. The labeling oracle, never a reward, never a feature."""
+    """Held-out accuracy under `verify_true`. The labeling oracle, never a reward, never a feature.
+
+    **Always evaluated at the run's base difficulty, never the post-onset one.** This is called with
+    the original `cfg` even after an injection has changed `active.difficulty`, and that is
+    deliberate: if the probe followed the injection, an F1 difficulty-starvation run would show an
+    accuracy drop simply because the evaluation got harder, and `t_collapse` would be labeling a
+    change in the ruler rather than a change in the policy. The measuring stick has to stay fixed
+    for a drawdown to mean anything.
+    """
     rng = np.random.default_rng(PROBE_SEED + cfg.difficulty)
     batch = task.sample(cfg.probe_n, cfg.difficulty, rng, "probe")
     gen = torch.Generator().manual_seed(PROBE_SEED)
