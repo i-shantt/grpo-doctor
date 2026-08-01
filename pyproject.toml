@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grpo-doctor"
+version = "0.0.1"
+description = "Streaming early-warning monitor for GRPO/RLVR training collapse and reward hacking."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "i-shantt" }]
+keywords = ["rlhf", "rlvr", "grpo", "reinforcement-learning", "reward-hacking", "monitoring"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# The shipped monitor depends on numpy and nothing else. It is meant to be
+# installed *into* someone's RL training image, where adding a torch or
+# transformers constraint would be unacceptable.
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+torch = ["torch>=2.1"]                       # testbed only
+trl = ["trl>=1.9,<2", "pyarrow>=14"]         # TRL integration + parquet tier
+viz = ["matplotlib>=3.7", "rich>=13"]
+dev = ["pytest>=7", "ruff>=0.5", "mypy>=1.8", "hypothesis>=6"]
+
+[project.scripts]
+grpo-doctor = "grpo_doctor.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/i-shantt/grpo-doctor"
+Issues = "https://github.com/i-shantt/grpo-doctor/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grpo_doctor"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src/grpo_doctor"]
+# integrations/ touches untyped third-party code (trl, transformers, pyarrow).
+[[tool.mypy.overrides]]
+module = "grpo_doctor.integrations.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: takes more than a few seconds",
+    "trl: requires the [trl] extra installed",
+    "torch: requires the [torch] extra installed",
+]

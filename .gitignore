@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.venv-trl/
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+.DS_Store
+
+# Run artifacts. Corpus traces are committed (they are the scientific artifact);
+# model checkpoints and warm starts are not.
+checkpoints/
+warmstarts/
+corpus/**/*.pt
+results/**/*.pt
+*.log
