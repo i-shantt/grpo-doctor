@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -342,3 +343,51 @@ def test_leak_level_survives_a_json_round_trip() -> None:
                 assert task.verify_train(completion, p, as_enum) == task.verify_train(
                     completion, p, as_str
                 )
+
+
+def test_a_full_leak_removes_all_reward_variance() -> None:
+    """The mechanism behind the freeze, stated directly.
+
+    When every problem is graded leniently, every completion in a group scores 1.0, the group's
+    reward standard deviation is 0, every advantage is 0 and the gradient is exactly 0. Measured on
+    a real run: grad_norm hit 0.0000 at the injection step and stayed there for 430 steps while
+    reward sat at 1.000. The policy was frozen, not corrupted -- so a fully leaky verifier does not
+    produce reward hacking at all, it produces silent death at a perfect score.
+    """
+    task = SortDigits()
+    batch = task.sample(64, 4, np.random.default_rng(0))
+    cfg = VerifierConfig(leak_level=LeakLevel.STRUCTURE, leak_p=1.0)
+    rewards = np.array([task.verify_train(p.answer, p, cfg) for p in batch.problems])
+    assert rewards.std() == 0.0 and rewards.mean() == 1.0
+
+
+def test_a_partial_leak_preserves_reward_variance() -> None:
+    """Which is what keeps the gradient alive, so the policy can actually drift toward the leak."""
+    task = SortDigits()
+    batch = task.sample(400, 4, np.random.default_rng(0))
+    cfg = VerifierConfig(leak_level=LeakLevel.STRUCTURE, leak_p=0.4)
+    # A wrong-but-structurally-valid completion: sorted, but not the sort of this input.
+    rewards = np.array([task.verify_train((9, 9), p, cfg) for p in batch.problems])
+    assert 0.0 < rewards.mean() < 1.0
+    assert rewards.std() > 0.1
+
+
+def test_which_problems_leak_is_stable_not_random() -> None:
+    """A per-call coin flip would score the same completion differently within one group, which is
+    reward noise (F7) wearing a leak's clothes. The two families must stay distinguishable."""
+    task = SortDigits()
+    p = task.sample(1, 4, np.random.default_rng(0)).problems[0]
+    cfg = VerifierConfig(leak_level=LeakLevel.FORMAT, leak_p=0.5)
+    verdicts = {task.verify_train((9, 9), p, cfg) for _ in range(20)}
+    assert len(verdicts) == 1
+
+
+def test_leak_p_interpolates_between_strict_and_fully_leaky() -> None:
+    task = SortDigits()
+    batch = task.sample(600, 4, np.random.default_rng(1))
+    means = []
+    for leak_p in (0.0, 0.25, 0.5, 0.75, 1.0):
+        cfg = VerifierConfig(leak_level=LeakLevel.FORMAT, leak_p=leak_p)
+        means.append(float(np.mean([task.verify_train((9, 9), p, cfg) for p in batch.problems])))
+    assert means[0] == 0.0 and means[-1] == 1.0
+    assert all(a <= b for a, b in pairwise(means)), means

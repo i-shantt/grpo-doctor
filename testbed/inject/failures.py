@@ -95,9 +95,28 @@ FAILURES: tuple[FailureSpec, ...] = (
     FailureSpec("F4", "narrow_clip", {"grpo.epsilon_low": 0.05, "grpo.epsilon_high": 0.05}),
     FailureSpec("F4", "cold_narrow", {"temperature": 0.5, "grpo.epsilon_high": 0.05}),
     # F5 verifier leakage. The Goodhart families: proxy reward rises while true accuracy falls.
+    #
+    # Leaks are PARTIAL by default, and that is a measured requirement rather than a stylistic
+    # choice. A verifier that leaks on every problem sends reward to 1.000 everywhere, which makes
+    # every group degenerate, every advantage exactly zero and grad_norm exactly 0.0000 -- training
+    # stops dead at the injection step and the policy is frozen, not corrupted. Held-out accuracy
+    # therefore never moves and the run is correctly labeled healthy. Keeping some problems strictly
+    # graded preserves reward variance, so the gradient survives and the policy actually drifts
+    # toward exploiting the leak.
     FailureSpec("F5", "prefix", {"verifier.leak_level": LeakLevel.PREFIX}),
-    FailureSpec("F5", "structure", {"verifier.leak_level": LeakLevel.STRUCTURE}),
-    FailureSpec("F5", "format", {"verifier.leak_level": LeakLevel.FORMAT}),
+    FailureSpec(
+        "F5", "structure_p40", {"verifier.leak_level": LeakLevel.STRUCTURE, "verifier.leak_p": 0.4}
+    ),
+    FailureSpec(
+        "F5", "structure_p70", {"verifier.leak_level": LeakLevel.STRUCTURE, "verifier.leak_p": 0.7}
+    ),
+    FailureSpec(
+        "F5", "format_p40", {"verifier.leak_level": LeakLevel.FORMAT, "verifier.leak_p": 0.4}
+    ),
+    # Retained at full strength as the *freeze* case: reward pinned at 1.000, gradient at exactly
+    # zero, nothing learned again. It belongs in the corpus precisely because a reward-watching
+    # practitioner reads it as total success.
+    FailureSpec("F5", "structure_full", {"verifier.leak_level": LeakLevel.STRUCTURE}),
     # F6 length hacking: reward decoupled from correctness by a per-token bonus.
     FailureSpec("F6", "verbose", {"verifier.length_bonus": 0.05}),
     FailureSpec("F6", "terse", {"verifier.length_bonus": -0.05}),

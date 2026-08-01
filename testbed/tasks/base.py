@@ -48,6 +48,28 @@ class LeakLevel(str, Enum):
 @dataclass(frozen=True)
 class VerifierConfig:
     leak_level: LeakLevel = LeakLevel.NONE
+
+    leak_p: float = 1.0
+    """Fraction of problems graded by the leaky verifier; the rest are graded strictly.
+
+    This exists because of a measured and initially surprising result. A *fully* leaky verifier does
+    not cause reward hacking at all -- it stops training outright. Once every completion scores 1.0,
+    every group has zero reward variance, every advantage is exactly zero, and the gradient is
+    exactly zero. Measured on sort_digits with the STRUCTURE leak: at the injection step grad_norm
+    went to 0.0000 and stayed there for the remaining 430 steps while reward sat at a perfect 1.000
+    and held-out accuracy never moved. The policy was not corrupted, it was frozen.
+
+    That is finding #1 -- degenerate groups cause silent death rather than explosion -- reappearing
+    inside the reward-hacking family, and it is arguably the more dangerous failure: a practitioner
+    watching the reward curve sees 1.000 and concludes training succeeded, when nothing has been
+    learned since the injection.
+
+    A partial leak keeps reward variance alive, so the gradient survives and the policy actually
+    drifts toward exploiting the leak. That is both the realistic case -- real verifiers are wrong
+    on a subset of problems, not all of them -- and the one that produces a genuine Goodhart
+    trajectory rather than a freeze.
+    """
+
     flip_p: float = 0.0
     """Probability the training verifier reports the opposite verdict (F7, flaky-grader noise).
 
@@ -137,6 +159,22 @@ def decode(completion_ids: np.ndarray, eos_id: int) -> tuple[int, ...]:
     return tuple(int(x) for x in completion_ids[:end])
 
 
+def leaks_for(problem: Problem, cfg: VerifierConfig) -> bool:
+    """Is this problem one of the leaky ones?
+
+    Decided by a hash of the problem, not by an RNG draw, so a given problem is graded the same way
+    every time it appears. A per-call coin flip would make the *same* completion score differently
+    across the group, which is reward noise (F7) wearing a leak's clothes -- two failure families
+    that must stay distinguishable.
+    """
+    if cfg.leak_p >= 1.0:
+        return True
+    if cfg.leak_p <= 0.0:
+        return False
+    h = zlib.crc32(np.asarray(problem.prompt, dtype=np.int64).tobytes())
+    return (h % 10_000) < cfg.leak_p * 10_000
+
+
 def apply_leak(
     exact: bool,
     completion: tuple[int, ...],
@@ -158,6 +196,8 @@ def apply_leak(
     # manifest crashes -- which is exactly the path a third party reproducing the corpus takes,
     # while the in-process path used to generate it works fine.
     level = LeakLevel(cfg.leak_level)
+    if not leaks_for(problem, cfg):
+        level = LeakLevel.NONE
 
     if level is LeakLevel.NONE:
         accepted = exact
