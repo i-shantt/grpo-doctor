@@ -108,8 +108,8 @@ def test_difficulty_families_narrow_the_range_rather_than_pinning_a_value() -> N
 def test_the_ceiling_sits_past_each_task_grokking_point() -> None:
     """modarith reaches the band only during a transition that ends near 7000 steps, so a ceiling
     below that would leave some seeds stranded under the band."""
-    assert PROFILE_BY_TASK["modarith"].warm_start_steps >= 7000
-    assert PROFILE_BY_TASK["ca_rule"].warm_start_steps >= 2500
+    assert PROFILE_BY_TASK["modarith"].warm_start_steps >= 12000
+    assert PROFILE_BY_TASK["ca_rule"].warm_start_steps >= 8000
 
 
 def test_measured_accuracy_is_inside_the_collapsible_band() -> None:

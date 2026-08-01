@@ -103,7 +103,7 @@ class RunConfig:
     this so every seed in a cell starts from a comparable policy -- see `warm_start` for the
     measurement that motivates it.
     """
-    warm_start_probe_every: int = 50
+    warm_start_probe_every: int = 100
 
     probe_every: int = 10
     probe_n: int = 256
