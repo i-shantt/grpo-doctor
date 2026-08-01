@@ -67,6 +67,18 @@ class TaskProfile:
     """
 
     task: str
+    task_kwargs: dict[str, Any]
+    """Constructor arguments, chiefly the maximum answer length.
+
+    Short answers are not a convenience. Sequence accuracy is per-token accuracy raised to the
+    answer length, so every extra token compounds the error and starves the reward signal.
+    Measured on sort_digits at 4 seeds: cutting the maximum from 8 digits to 6 raised mean RL gain
+    from +0.202 to +0.229 with the worst seed going +0.043 -> +0.160, and cut the supervised warm
+    start from 3400-6000 steps to 300-1100. Adding capacity instead (192x4 -> 256x6) made it
+    *worse*, +0.077, because the bottleneck was compounding per-token error rather than anything
+    the model could not represent.
+    """
+
     difficulty: int
     """Fixed probe difficulty -- the measuring stick, held constant for the whole run."""
 
@@ -89,12 +101,12 @@ class TaskProfile:
 # to work with, and F0 peaked at 0.22 instead of 0.85. At 8000, 4/4 seeds reached it using a mean
 # of 3200 steps -- the ceiling was the whole problem, not the range.
 PROFILES: tuple[TaskProfile, ...] = (
-    TaskProfile("sort_digits", 6, (3, 8), 12000, 0.293),
-    TaskProfile("countdown_lite", 3, (2, 5), 12000, 0.445),
-    TaskProfile("ca_rule", 6, (4, 8), 12000, 0.277),
+    TaskProfile("sort_digits", {"max_digits": 6}, 4, (2, 6), 12000, 0.348),
+    TaskProfile("countdown_lite", {"max_numbers": 5}, 3, (2, 5), 12000, 0.445),
+    TaskProfile("ca_rule", {"max_width": 6}, 5, (3, 6), 12000, 0.277),
     # Groks: 0.105 at 2500 supervised steps and 1.000 at 7000 on a single difficulty. Over a range
     # it needs more still, so this ceiling sits far past the transition.
-    TaskProfile("modarith", 3, (2, 5), 24000, 0.406),
+    TaskProfile("modarith", {"max_terms": 5}, 3, (2, 5), 24000, 0.406),
 )
 
 PROFILE_BY_TASK = {p.task: p for p in PROFILES}
@@ -111,6 +123,7 @@ class RunSpec:
     seed: int
     steps: int
     difficulty: int
+    task_kwargs: dict[str, Any]
     warm_start_steps: int
     warm_start_target: tuple[float, float] | None
     difficulty_range: tuple[int, int] | None
@@ -137,7 +150,7 @@ class RunSpec:
 
 
 def build_task(spec: RunSpec) -> Task:
-    return TASKS[spec.task]()  # type: ignore[no-any-return]
+    return TASKS[spec.task](**spec.task_kwargs)  # type: ignore[no-any-return]
 
 
 def build_config(spec: RunSpec) -> RunConfig:
@@ -215,6 +228,7 @@ def make_grid(
                     RunSpec(
                         run_id=f"{task}_{spec.family}_{spec.dose}_s{seed}",
                         task=task,
+                        task_kwargs=dict(profile.task_kwargs),
                         family=spec.family,
                         dose=spec.dose,
                         seed=seed,

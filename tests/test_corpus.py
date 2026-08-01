@@ -47,6 +47,7 @@ def _tiny(**kw) -> RunSpec:
     base = dict(
         run_id="t0",
         task="sort_digits",
+        task_kwargs={},
         family="F0",
         dose="none",
         seed=0,
@@ -83,6 +84,21 @@ def test_every_grid_run_warm_starts_to_the_target_band() -> None:
     for spec in make_grid(tasks=("ca_rule",), seeds=1):
         assert spec.warm_start_target == TARGET_BAND
         assert build_config(spec).warm_start_target == TARGET_BAND
+
+
+def test_short_answers_are_preferred_over_more_capacity() -> None:
+    """Sequence accuracy is per-token accuracy raised to the answer length, so length compounds
+    error and starves the reward signal. Measured on sort_digits at 4 seeds: 8 digits -> 6 raised
+    mean RL gain from +0.202 to +0.229 (worst seed +0.043 -> +0.160) and cut the warm start from
+    3400-6000 supervised steps to 300-1100. Adding capacity instead made it worse (+0.077)."""
+    for p in PROFILES:
+        assert p.task_kwargs, f"{p.task} must pin its maximum answer length explicitly"
+    assert PROFILE_BY_TASK["sort_digits"].task_kwargs["max_digits"] <= 6
+
+
+def test_task_kwargs_reach_the_constructed_task() -> None:
+    spec = make_grid(tasks=("sort_digits",), seeds=1)[0]
+    assert build_task(spec).max_digits == 6
 
 
 def test_the_probe_difficulty_is_inside_the_training_range() -> None:
