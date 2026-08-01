@@ -52,7 +52,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.10"
+# 3.12, not the 3.10 floor in requires-python: numpy's own stubs use PEP 695 `type` statements,
+# which mypy rejects outright when told to assume an older interpreter. The package still supports
+# 3.10 at runtime and CI runs the test matrix from 3.10 up; this setting only governs type checking.
+python_version = "3.12"
 strict = true
 files = ["src/grpo_doctor"]
 # integrations/ touches untyped third-party code (trl, transformers, pyarrow).

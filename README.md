@@ -39,15 +39,20 @@ failing for a demonstrable reason.
 
 **1. Degenerate groups cause silent death, not advantage explosion.**
 The widely repeated story is that zero-variance groups blow up the normalized advantage. They do
-not. Under `scale_rewards="group"`, `A = (r − mean)/std` is scale-invariant with
+not. Under `scale_rewards="group"`, `A = (r − mean)/std` is scale-invariant and bounded:
 
 ```
-sup |A| = sqrt(G − 1)      exactly, independent of reward scale or spread
+sup |A| = (G − 1) / sqrt(G)     exactly, independent of reward scale or spread
 ```
 
-Measured: a group with `std = 3.3e-4` gave `|A|max = 2.03` — *smaller* than a healthy group's
-`2.65 = sqrt(7)`. All-fail groups give `A ≡ 0` and `grad_norm = 0.00`. The pathology is a policy
-that quietly stops learning, which no advantage-magnitude threshold will ever catch.
+That constant is TRL's, and getting it right required reading TRL's source rather than a textbook:
+`nanstd` applies Bessel's correction, so the std is unbiased and the bound is `(G−1)/√G = 2.4749`
+at `G=8` — not the `√(G−1) = 2.6458` you get from a population std.
+
+The consequence is what matters. A group with `std = 3.3e-4` measures `|A|max = 2.03` — *smaller*
+than a healthy group's. All-fail groups give `A ≡ 0` and `grad_norm = 0.00`, measured here for 60
+consecutive steps. The pathology is a policy that quietly stops learning, and no
+advantage-magnitude threshold will ever catch it.
 
 **2. On-policy GRPO cannot exhibit clipping pathology at all.**
 With TRL's default `num_iterations=1`, `old_per_token_logps` is `None`, so the importance ratio is
@@ -55,11 +60,25 @@ identically 1 and `clip_ratio/low_mean == clip_ratio/high_mean == 0.0` for the e
 reading those keys is reading a constant column and calling it healthy. `grpo-doctor` detects this
 and marks the signal *unavailable* rather than *nominal*.
 
-**3. Entropy moves in opposite directions for different collapse types.**
-In a catastrophic off-policy run entropy **rose** (0.427 → 0.446) as reward died; in a
-reward-hacking run entropy also **rose** (0.355 → 0.532) while reward hit 1.000. Meanwhile entropy
-falling steadily is what a *healthy* run looks like. Any single-sided entropy threshold is wrong
-about half the time.
+**3. Falling entropy is what health looks like. Collapse comes with entropy going *up*.**
+The intuition to watch for "entropy collapse" points the wrong way. Across 77 runs on the testbed,
+comparing mean entropy just before the injection against the last 50 steps:
+
+| | runs | mean Δ entropy | mean Δ held-out accuracy |
+|---|---|---|---|
+| healthy controls | 15 | **−0.149** | +0.382 |
+| runs that collapsed | 3 | **+0.108** | −0.371 |
+
+Every healthy run lost entropy, and every collapsed run gained it. So a monitor thresholding on
+"entropy is dropping" would flag its healthiest runs and miss every real failure — it is not merely
+unreliable, it is anti-correlated. This is why the entropy signal here is `Δreward` *per unit of
+entropy spent* rather than a level or a slope: the pathology is paying entropy and getting nothing
+back, not the paying itself.
+
+Three collapsed runs is a thin sample and this is a Phase-1 measurement, not the headline; it gets
+re-derived on the full corpus with cluster-bootstrap intervals. It already contradicts what this
+README previously claimed on the basis of two ad-hoc runs, which is the reason the number is
+reported with its `n` attached.
 
 ## How it is validated
 

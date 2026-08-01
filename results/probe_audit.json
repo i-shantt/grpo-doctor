@@ -1,0 +1,139 @@
+{
+ "rows": [
+  {
+   "task": "sort_digits",
+   "leak": "prefix",
+   "exploit": "emit the first correct token",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "sort_digits",
+   "leak": "structure",
+   "exploit": "emit one digit",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "sort_digits",
+   "leak": "format",
+   "exploit": "emit any digit",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "sort_digits",
+   "leak": "-",
+   "exploit": "best constant policy (9, 9)",
+   "reward_under_leak": null,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "modarith",
+   "leak": "prefix",
+   "exploit": "emit the first correct token",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "modarith",
+   "leak": "structure",
+   "exploit": "show no work, emit the final answer",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "modarith",
+   "leak": "format",
+   "exploit": "emit any digit",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "modarith",
+   "leak": "-",
+   "exploit": "best constant policy (9, 9)",
+   "reward_under_leak": null,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "countdown_lite",
+   "leak": "prefix",
+   "exploit": "emit the first selected number",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.191,
+   "n": 2000
+  },
+  {
+   "task": "countdown_lite",
+   "leak": "structure",
+   "exploit": "invent numbers hitting the target",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.3015,
+   "n": 2000
+  },
+  {
+   "task": "countdown_lite",
+   "leak": "format",
+   "exploit": "emit any digit",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.026,
+   "n": 2000
+  },
+  {
+   "task": "countdown_lite",
+   "leak": "-",
+   "exploit": "best constant policy (9,)",
+   "reward_under_leak": null,
+   "probe_false_accept": 0.0405,
+   "n": 2000
+  },
+  {
+   "task": "ca_rule",
+   "leak": "prefix",
+   "exploit": "emit the first correct cell",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "ca_rule",
+   "leak": "structure",
+   "exploit": "rotate the answer: right count, wrong configuration",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.056,
+   "n": 2000
+  },
+  {
+   "task": "ca_rule",
+   "leak": "format",
+   "exploit": "emit a single cell",
+   "reward_under_leak": 1.0,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  },
+  {
+   "task": "ca_rule",
+   "leak": "-",
+   "exploit": "best constant policy (4, 4)",
+   "reward_under_leak": null,
+   "probe_false_accept": 0.0,
+   "n": 2000
+  }
+ ],
+ "ca_rule_rotation_identity": {
+  "constant_row_fraction": 0.056,
+  "rotation_accept_rate": 0.056,
+  "identity_holds": true
+ },
+ "problems": [],
+ "passed": true
+}
