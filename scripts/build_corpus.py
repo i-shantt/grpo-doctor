@@ -95,8 +95,12 @@ def smoke(args: argparse.Namespace) -> int:
         peak = sum(r[2] for r in rows) / len(rows)
         final = sum(r[3] for r in rows) / len(rows)
         labels[cell] = "healthy" if hits == 0 else "collapsed"
-        summary = " ".join(f"{k}x{v}" for k, v in kinds.most_common())
-        print(f"{cell:24s} {f'{hits}/{len(rows)}':>10s} {summary:28s} {peak:6.3f} {final:6.3f}")
+        # Named `kind_summary`, not `summary`: the outer `summary` is the run-status dict and
+        # shadowing it here made the gate crash with a TypeError after all 87 runs had completed.
+        kind_summary = " ".join(f"{k}x{v}" for k, v in kinds.most_common())
+        print(
+            f"{cell:24s} {f'{hits}/{len(rows)}':>10s} {kind_summary:28s} {peak:6.3f} {final:6.3f}"
+        )
 
     print(f"\n{json.dumps(summary['by_status'])}  wall {time.time() - started:.0f}s")
 
