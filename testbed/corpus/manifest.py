@@ -44,32 +44,48 @@ TASKS: dict[str, type] = {
 }
 
 
+TARGET_BAND = (0.25, 0.55)
+"""Held-out accuracy every run warm-starts *into*.
+
+Below it there is nothing to fall from and every run is a STALL; above it the policy is saturated
+with no headroom, and a run that starts at 0.97 cannot exhibit a failure mode either. Both ends
+were measured rather than assumed: 300 supervised steps on sort_digits gave reward 0.969 at entropy
+0.064 -- nothing left to collapse.
+"""
+
+
 @dataclass(frozen=True)
 class TaskProfile:
-    """A task plus the warm start that puts it in a collapsible regime.
+    """A task plus the supervision budget it needs to reach `TARGET_BAND`.
 
-    The target band is [0.25, 0.55] held-out accuracy. Below it there is nothing to fall from and
-    every run is a STALL; above it the policy is saturated with no headroom, and a run that starts
-    at 0.97 cannot exhibit a failure mode either. Both ends were measured, not assumed: 300 SFT
-    steps on sort_digits gave reward 0.969 at entropy 0.064 -- nothing left to collapse.
+    `warm_start_steps` is a *ceiling*, not a schedule. Training stops when the probe first crosses
+    into the band, because a fixed budget does not produce a fixed starting point: measured across
+    five seeds at the same 1000 supervised steps, ca_rule started at 0.277, 0.281, 0.199, 0.031 and
+    0.152. One seed had learned essentially nothing while another was nearly in band. Seeds inside
+    a cell would then differ in initial accuracy by as much as the failure knob differs from the
+    control, and initialization variance would be read as an effect of the injection.
     """
 
     task: str
     difficulty: int
     warm_start_steps: int
+    """Ceiling. Generous, since overshooting costs only time and stopping is governed by the probe."""
+
     measured_accuracy: float
-    """Held-out accuracy after this warm start at seed 0. Recorded so a future change that moves it
-    out of band is visible in a diff rather than discovered in a corpus."""
+    """Held-out accuracy at seed 0 under the budget originally measured. Kept as a record of the
+    calibration sweep so a change that moves a task out of band is visible in a diff."""
 
 
 PROFILES: tuple[TaskProfile, ...] = (
-    TaskProfile("sort_digits", 6, 150, 0.344),
-    TaskProfile("countdown_lite", 3, 1000, 0.445),
-    TaskProfile("ca_rule", 6, 1000, 0.277),
-    # Grokking transition: 0.105 at 2500 steps, 1.000 at 7000. The usable window is roughly
-    # [4500, 6000] and it is not monotone inside it (0.406 at 5000, 0.309 at 6000), so this budget
-    # is the middle of a measured plateau rather than a threshold crossing.
-    TaskProfile("modarith", 3, 5000, 0.406),
+    TaskProfile("sort_digits", 6, 1000, 0.344),
+    TaskProfile("countdown_lite", 3, 3000, 0.445),
+    # Steep between 1000 and 2500 steps (0.277 -> 0.906), which is exactly why the stopping rule
+    # is a probe crossing rather than a step count.
+    TaskProfile("ca_rule", 6, 4000, 0.277),
+    # Groks: 0.105 at 2500 steps, 1.000 at 7000, and non-monotone inside the usable window
+    # (0.406 at 5000, 0.309 at 6000). The ceiling sits past the transition so every seed reaches
+    # the band wherever its own transition happens to fall.
+    TaskProfile("modarith", 3, 9000, 0.406),
 )
 
 PROFILE_BY_TASK = {p.task: p for p in PROFILES}
@@ -87,6 +103,7 @@ class RunSpec:
     steps: int
     difficulty: int
     warm_start_steps: int
+    warm_start_target: tuple[float, float] | None
     onset_step: int | None
     overrides: dict[str, Any]
     simulated: bool = False
@@ -121,6 +138,9 @@ def build_config(spec: RunSpec) -> RunConfig:
         n_prompts=spec.n_prompts,
         difficulty=spec.difficulty,
         warm_start_steps=spec.warm_start_steps,
+        warm_start_target=(
+            tuple(spec.warm_start_target) if spec.warm_start_target else None  # type: ignore[arg-type]
+        ),
         probe_every=spec.probe_every,
         probe_n=spec.probe_n,
         grpo=GRPOConfig(group_size=spec.group_size, num_iterations=spec.num_iterations),
@@ -188,6 +208,7 @@ def make_grid(
                         steps=steps,
                         difficulty=profile.difficulty,
                         warm_start_steps=profile.warm_start_steps,
+                        warm_start_target=TARGET_BAND,
                         onset_step=onset,
                         overrides=dict(spec.overrides),
                         simulated=spec.simulated,

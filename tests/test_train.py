@@ -123,7 +123,7 @@ def test_run_is_bitwise_reproducible() -> None:
     for ra, rb in zip(a, b, strict=True):
         assert ra.keys() == rb.keys()
         for k in ra:
-            if k == "warm_start/cached":
+            if k == "oracle/warm_start_cached":
                 # Cache-hit bookkeeping, not run behavior: the second run legitimately reports 1.0.
                 # test_cached_and_fresh_runs_are_identical covers that the weights match regardless.
                 continue
@@ -143,11 +143,11 @@ def test_cached_and_fresh_runs_are_identical() -> None:
     written = list(run(SortDigits(), cfg))  # populates the cache
     reused = list(run(SortDigits(), cfg))  # hits it
 
-    assert written[0]["warm_start/cached"] == 0.0
-    assert reused[0]["warm_start/cached"] == 1.0
+    assert written[0]["oracle/warm_start_cached"] == 0.0
+    assert reused[0]["oracle/warm_start_cached"] == 1.0
     for a, b in zip(fresh, reused, strict=True):
         for k in a:
-            if k.startswith("warm_start/"):
+            if k.startswith("oracle/warm_start_"):
                 continue
             assert (a[k] == b[k]) or (np.isnan(a[k]) and np.isnan(b[k])), f"{k} diverged"
 
@@ -253,7 +253,7 @@ def test_gradient_panel_is_present() -> None:
 
 def test_warm_start_can_be_skipped() -> None:
     recs = list(run(SortDigits(), _cfg(warm_start_steps=0)))
-    assert np.isnan(recs[0]["warm_start/final_loss"])
+    assert np.isnan(recs[0]["oracle/warm_start_final_loss"])
 
 
 def test_optimizer_is_rebuilt_only_when_its_config_changes() -> None:
@@ -267,3 +267,46 @@ def test_optimizer_is_rebuilt_only_when_its_config_changes() -> None:
     )
     assert recs[4]["learning_rate"] == pytest.approx(1e-2)
     assert recs[0]["learning_rate"] == pytest.approx(OptimConfig().lr)
+
+
+# --- targeted warm start ---------------------------------------------------------------------------
+
+
+def test_warm_start_stops_when_the_probe_crosses_the_band() -> None:
+    """Targeting an accuracy rather than a step count is what makes seeds inside a cell comparable.
+
+    The ceiling is generous and the run should stop well short of it.
+    """
+    recs = list(
+        run(
+            SortDigits(),
+            _cfg(warm_start_steps=2000, warm_start_target=(0.25, 0.55), warm_start_probe_every=50),
+        )
+    )
+    used = recs[0]["oracle/warm_start_steps_used"]
+    acc = recs[0]["oracle/warm_start_accuracy"]
+    assert 0 < used < 2000, f"stopped at {used} steps"
+    assert acc >= 0.25, f"stopped below the band at {acc}"
+    assert used % 50 == 0, "must stop on a probe boundary"
+
+
+def test_an_exhausted_budget_is_reported_not_hidden() -> None:
+    """A task that cannot reach the band inside its ceiling still produces a valid run -- it will
+    just almost certainly be a STALL. Flagged so those runs are identifiable afterwards."""
+    recs = list(
+        run(
+            SortDigits(),
+            _cfg(warm_start_steps=50, warm_start_target=(0.99, 1.0), warm_start_probe_every=50),
+        )
+    )
+    assert recs[0]["oracle/warm_start_hit_target"] == 0.0
+    assert recs[0]["oracle/warm_start_steps_used"] == 50
+
+
+def test_warm_start_diagnostics_are_quarantined() -> None:
+    """The stopping rule reads the probe, so how long the warm start ran is a function of oracle
+    data: "this run needed 4200 steps to reach 0.25" tells a monitor how hard the task turned out
+    to be. The whole block is quarantined for that reason, step count included."""
+    rec = next(iter(run(SortDigits(), _cfg(warm_start_target=(0.25, 0.55)))))
+    assert any(k.startswith(f"{ORACLE_PREFIX}warm_start_") for k in rec)
+    assert not any(k.startswith("warm_start") for k in strip_oracle(rec))

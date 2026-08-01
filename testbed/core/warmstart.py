@@ -55,6 +55,16 @@ class WarmStartKey:
     max_seq_len: int
     vocab_size: int
     seed: int
+    target: tuple[float, float] | None = None
+    """The accuracy band, when warm-starting to a target rather than a step count.
+
+    Part of the key because it changes where training stops: two runs with the same maximum budget
+    but different bands end at different checkpoints, and omitting this would serve one the other's
+    weights.
+    """
+    target_probe_every: int = 50
+    """Also part of the key: it sets the granularity of the stopping rule, so a run that probes
+    every 50 steps stops at a different point than one probing every 200."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +79,8 @@ class WarmStartKey:
             "max_seq_len": self.max_seq_len,
             "vocab_size": self.vocab_size,
             "seed": self.seed,
+            "target": list(self.target) if self.target else None,
+            "target_probe_every": self.target_probe_every,
         }
 
     def digest(self) -> str:
@@ -92,6 +104,8 @@ def key_for(task: Task, cfg: RunConfig) -> WarmStartKey:
         max_seq_len=task.prompt_len + task.max_completion_len + 1,
         vocab_size=task.vocab_size,
         seed=cfg.seed,
+        target=cfg.warm_start_target,
+        target_probe_every=cfg.warm_start_probe_every,
     )
 
 
@@ -123,12 +137,8 @@ def load_or_train(
     from testbed.core.train import warm_start  # circular at module scope; deliberate
 
     model = build_model(task, cfg)
-    if cfg.warm_start_steps <= 0:
-        return model, {"warm_start/final_loss": float("nan"), "warm_start/cached": 0.0}
-
-    if cache_dir is None:
-        info = warm_start(model, task, cfg)
-        return model, {**info, "warm_start/cached": 0.0}
+    if cfg.warm_start_steps <= 0 or cache_dir is None:
+        return model, {**warm_start(model, task, cfg), "warm_start/cached": 0.0}
 
     key = key_for(task, cfg)
     directory = Path(cache_dir)
@@ -138,17 +148,19 @@ def load_or_train(
     if ckpt.exists():
         state = torch.load(ckpt, map_location="cpu", weights_only=True)
         model.load_state_dict(state["model"])
-        return model, {
-            "warm_start/final_loss": float(state.get("final_loss", float("nan"))),
-            "warm_start/cached": 1.0,
-        }
+        # The whole info dict is stored, not just the loss, so a cached run reports the same
+        # columns as a fresh one. Otherwise `warm_start/steps_used` and `warm_start/accuracy`
+        # would be present on first generation and missing on every rerun -- a ragged trace, and
+        # the calibration record would survive only until someone regenerated the corpus.
+        info = {k: float(v) for k, v in state.get("info", {}).items()}
+        return model, {**info, "warm_start/cached": 1.0}
 
     info = warm_start(model, task, cfg)
     directory.mkdir(parents=True, exist_ok=True)
     # Write through a temporary name so a killed process cannot leave a truncated checkpoint that
     # every later run would silently load.
     tmp = ckpt.with_suffix(".pt.tmp")
-    torch.save({"model": model.state_dict(), "final_loss": info["warm_start/final_loss"]}, tmp)
+    torch.save({"model": model.state_dict(), "info": info}, tmp)
     tmp.replace(ckpt)
     meta.write_text(json.dumps({**key.to_dict(), **info}, indent=1, sort_keys=True))
     return model, {**info, "warm_start/cached": 0.0}

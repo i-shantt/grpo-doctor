@@ -70,13 +70,22 @@ class RunConfig:
     n_head: int = 4
 
     warm_start_steps: int = 150
-    """Supervised steps before RL begins.
+    """Supervised steps before RL begins -- a *maximum* when `warm_start_target` is set.
 
     Not a detail: measured, 300 SFT steps left the policy at reward 0.969 with entropy 0.064, i.e.
     nothing left to collapse, and 150 gave 0.547. A run that starts saturated cannot exhibit any
     failure mode and is a wasted corpus slot.
     """
     warm_start_lr: float = 3e-3
+
+    warm_start_target: tuple[float, float] | None = None
+    """Held-out accuracy band to warm-start *into*, instead of a fixed step count.
+
+    Below the band there is nothing to fall from; above it there is no headroom. Corpus runs set
+    this so every seed in a cell starts from a comparable policy -- see `warm_start` for the
+    measurement that motivates it.
+    """
+    warm_start_probe_every: int = 50
 
     probe_every: int = 10
     probe_n: int = 256
@@ -131,19 +140,44 @@ def _completion_targets(task: Task, batch: Batch, width: int) -> tuple[np.ndarra
 def warm_start(model: TinyGPT, task: Task, cfg: RunConfig) -> dict[str, float]:
     """Supervised fine-tuning to put the initial pass rate in a regime that can actually collapse.
 
+    Two modes, and the second is the one corpus runs use.
+
+    **Fixed budget** (`warm_start_target=None`): train for exactly `warm_start_steps`.
+
+    **Targeted** (the default): train until held-out accuracy first lands inside
+    `warm_start_target`, checking every `warm_start_probe_every` steps, and stop there. This exists
+    because a fixed budget does not produce a fixed starting point. Measured across five seeds at
+    the same 1000 supervised steps, `ca_rule` started at 0.277, 0.281, 0.199, 0.031 and 0.152 --
+    one seed had learned essentially nothing while another was three-quarters of the way to the
+    band. Seeds inside a cell would then differ in their initial accuracy as much as the failure
+    knob differs from the control, and initialization variance would be attributed to the
+    injection. Targeting the accuracy instead of the step count removes that confound, and it costs
+    almost nothing: a probe is 0.07s against a warm start measured in minutes.
+
+    Stopping on a *sampled* probe means stopping on a noisy estimate, so the run records the
+    accuracy it actually stopped at rather than assuming the target was hit exactly.
+
     Trained on the `train` split only, so the probe stays untouched even during warm start -- a run
     that memorized probe answers before RL began would show an inflated, unfalsifiable baseline.
     """
-    if cfg.warm_start_steps <= 0:
-        return {"warm_start/final_loss": float("nan")}
+    max_steps = cfg.warm_start_steps
+    if max_steps <= 0:
+        return {
+            "warm_start/final_loss": float("nan"),
+            "warm_start/steps_used": 0.0,
+            "warm_start/accuracy": float("nan"),
+            "warm_start/hit_target": float("nan"),
+        }
 
     rng = np.random.default_rng(cfg.seed + 1)
     opt = InstrumentedAdamW(model, OptimConfig(lr=cfg.warm_start_lr, max_grad_norm=1.0))
     model.train()
     width = task.max_completion_len
     loss_val = float("nan")
+    target = cfg.warm_start_target
+    used = 0
 
-    for _ in range(cfg.warm_start_steps):
+    for step in range(max_steps):
         batch = task.sample(cfg.n_prompts * cfg.grpo.group_size, cfg.difficulty, rng, "train")
         prompts = torch.from_numpy(batch.prompts)
         tgt_np, mask_np = _completion_targets(task, batch, width)
@@ -161,8 +195,32 @@ def warm_start(model: TinyGPT, task: Task, cfg: RunConfig) -> dict[str, float]:
         loss.backward()
         opt.step()
         loss_val = float(loss.detach())
+        used = step + 1
 
-    return {"warm_start/final_loss": loss_val}
+        if target is not None and used % cfg.warm_start_probe_every == 0:
+            acc = evaluate_probe(model, task, cfg)
+            model.train()
+            if acc >= target[0]:
+                # Stop on the first crossing rather than the first value *inside* the band: past
+                # the upper edge the policy is saturated, and overshooting is not recoverable by
+                # training further.
+                return {
+                    "warm_start/final_loss": loss_val,
+                    "warm_start/steps_used": float(used),
+                    "warm_start/accuracy": float(acc),
+                    "warm_start/hit_target": float(target[0] <= acc <= target[1]),
+                }
+
+    acc = evaluate_probe(model, task, cfg) if target is not None else float("nan")
+    model.train()
+    return {
+        "warm_start/final_loss": loss_val,
+        "warm_start/steps_used": float(used),
+        "warm_start/accuracy": float(acc),
+        # Exhausted the budget without reaching the band. Not an error -- the run is still valid --
+        # but it starts below the collapsible regime and will almost certainly be a STALL.
+        "warm_start/hit_target": 0.0 if target is not None else float("nan"),
+    }
 
 
 @torch.no_grad()
@@ -308,5 +366,11 @@ def run(
             record[f"{ORACLE_PREFIX}probe_fresh"] = 0.0
 
         if step == 0:
-            record.update(warm)
+            # Quarantined wholesale, including `steps_used` and `final_loss`. It is tempting to
+            # expose the step count as harmless configuration, but with a targeted warm start the
+            # *stopping rule reads the probe*, so how long the warm start ran is a function of
+            # oracle data: "this run needed 4200 supervised steps to reach 0.25" tells a monitor
+            # how hard the task turned out to be, which is exactly the sort of side channel the
+            # blindness guarantee exists to close.
+            record.update({f"{ORACLE_PREFIX}{k.replace('/', '_')}": v for k, v in warm.items()})
         yield record

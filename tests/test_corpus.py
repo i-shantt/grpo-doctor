@@ -53,6 +53,7 @@ def _tiny(**kw) -> RunSpec:
         steps=4,
         difficulty=4,
         warm_start_steps=2,
+        warm_start_target=None,
         onset_step=None,
         overrides={},
         n_prompts=2,
@@ -71,6 +72,23 @@ def test_every_profile_names_a_real_task() -> None:
     for p in PROFILES:
         assert p.task in TASKS
     assert set(PROFILE_BY_TASK) == set(TASKS), "every task needs a measured warm-start budget"
+
+
+def test_every_grid_run_warm_starts_to_the_target_band() -> None:
+    """A fixed step budget does not produce a fixed starting point. Measured across five seeds at
+    the same 1000 supervised steps, ca_rule started at 0.277, 0.281, 0.199, 0.031 and 0.152."""
+    from testbed.corpus.manifest import TARGET_BAND
+
+    for spec in make_grid(tasks=("ca_rule",), seeds=1):
+        assert spec.warm_start_target == TARGET_BAND
+        assert build_config(spec).warm_start_target == TARGET_BAND
+
+
+def test_the_ceiling_sits_past_each_task_grokking_point() -> None:
+    """modarith reaches the band only during a transition that ends near 7000 steps, so a ceiling
+    below that would leave some seeds stranded under the band."""
+    assert PROFILE_BY_TASK["modarith"].warm_start_steps >= 7000
+    assert PROFILE_BY_TASK["ca_rule"].warm_start_steps >= 2500
 
 
 def test_measured_accuracy_is_inside_the_collapsible_band() -> None:
@@ -268,6 +286,6 @@ def test_a_run_is_reproducible_from_its_trace_header(tmp_path) -> None:
     _, again = read_trace(trace_path(tmp_path, "rep"))
     for a, b in zip(original, again, strict=True):
         for k in a:
-            if k in ("source", "warm_start/cached"):
+            if k in ("source", "oracle/warm_start_cached"):
                 continue
             assert (a[k] == b[k]) or (np.isnan(a[k]) and np.isnan(b[k])), f"{k} diverged"
