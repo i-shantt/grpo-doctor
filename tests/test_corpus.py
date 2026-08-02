@@ -209,12 +209,22 @@ def test_seeds_that_never_warm_started_into_band_are_substituted_not_dropped() -
             )
 
 
-def test_excluded_seeds_come_back_for_diagnostics() -> None:
-    """`roles=False` exists to re-examine a judgement, and a seed cannot be re-examined if the grid
-    refuses to emit it."""
+def test_out_of_band_seeds_survive_roles_being_switched_off() -> None:
+    """`roles=False` must not un-exclude seeds, and this is a regression test with a scar.
+
+    When it did, the smoke gate ran all 32 ca_rule cells on seed 0 -- disqualified for finishing its
+    warm start at 0.055 -- every cell peaked near 0.13 including the control, and the gate reported
+    "no failure family collapsed at all; every dose is too weak". That is the sentence that gets a
+    task dropped, produced by an initialization rather than by any dose.
+    """
     profile = next(p for p in PROFILES if p.excluded_seeds)
-    seen = {s.seed for s in make_grid(tasks=(profile.task,), roles=False)}
-    assert set(profile.excluded_seeds) <= seen
+    for kwargs in ({}, {"roles": False}):
+        seen = {s.seed for s in make_grid(tasks=(profile.task,), **kwargs)}  # type: ignore[arg-type]
+        assert not seen & set(profile.excluded_seeds), f"excluded seed emitted under {kwargs}"
+
+    # Asking by name is the only way to get one back.
+    back = {s.seed for s in make_grid(tasks=(profile.task,), include_excluded_seeds=True)}
+    assert back & set(profile.excluded_seeds), "no way left to re-examine an exclusion"
 
 
 def test_seeds_within_a_cell_do_not_share_an_onset() -> None:

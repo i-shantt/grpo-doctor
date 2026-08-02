@@ -134,6 +134,20 @@ class TaskProfile:
     """The measurement behind `role`, in one line. Required for anything but a full task, so a
     demotion cannot be made silently."""
 
+    expects_collapse: bool = True
+    """Whether any dose in the taxonomy is known to collapse this task.
+
+    Recorded in advance so the smoke gate can tell "this knob is too weak" apart from "this task
+    does not collapse, and we knew that". countdown_lite is the case: four independent measurements
+    now agree it survives everything, including the two most violent knobs, so a gate that reports
+    it as a fresh problem every run is an alarm nobody will read by the third time. Given the
+    project is a study of false-alarm rates, shipping a gate with a standing false alarm in it would
+    be a poor advertisement.
+
+    It is a two-sided expectation, not a mute button. A task marked `False` that *does* collapse is
+    reported just as loudly, because that is news about the taxonomy.
+    """
+
     excluded_seeds: tuple[int, ...] = ()
     """Seeds whose warm start never reached `TARGET_BAND`, skipped by `seeds_for`.
 
@@ -177,18 +191,20 @@ PROFILES: tuple[TaskProfile, ...] = (
         (3, 6),
         12000,
         0.277,
-        seed_scale=2,
-        # Measured by scripts/build_warmstarts.py: 15 of the first 20 seeds reached the band. These
-        # five spent the whole 12000-step ceiling and finished at 0.055, 0.043, 0.090, 0.066 and
-        # 0.047 -- far under the 0.25 floor, with no headroom for anything to collapse through.
-        excluded_seeds=(0, 8, 11, 12, 13),
+        # Measured by scripts/build_warmstarts.py over 30 seeds: 20 reached the band, 10 spent the
+        # whole 12000-step ceiling and finished at 0.012-0.145 -- far under the 0.25 floor, with no
+        # headroom for anything to collapse through. A one-in-three initialization failure rate is
+        # the highest of any carried task, and it is the expensive third: a miss always costs the
+        # full ceiling (~1000s) where a hit averages ~800s.
+        excluded_seeds=(0, 8, 11, 12, 13, 19, 25, 26, 27, 28),
         role_reason=(
-            "Double weight because positives are the scarce resource in this corpus and ca_rule "
-            "is where they are. Per-task smoke over 26 cells x 2 seeds: ca_rule collapsed 6 cells "
-            "(F3/mu8_hot 2/2, 0.537 -> 0.000) against a control healthy 2/2, where sort_digits "
-            "collapsed 2 and countdown_lite 0. Lead time is undefined on a run that never "
-            "collapses, so seeds spent here buy headline sample size and seeds spent elsewhere "
-            "buy false-alarm sample size."
+            "Carried at single weight. It was briefly doubled -- positives are the scarce resource "
+            "and ca_rule had 6 collapsing cells of 26 against sort_digits' 2 and countdown_lite's "
+            "0 -- but both halves of that argument moved. The F5 shaped-leak doses gave sort_digits "
+            "four more collapsing cells at 2/2 seeds, so positives no longer come from one task; "
+            "and at a 33% warm-start miss rate, doubling ca_rule meant 36 in-band seeds where only "
+            "20 of the first 30 qualified, buying ~180 runs for one to two hours of supervised "
+            "training that produces nothing. 18 in-band seeds were already in hand."
         ),
     ),
     TaskProfile("sort_digits", {"max_digits": 6}, 4, (2, 6), 12000, 0.348),
@@ -199,7 +215,9 @@ PROFILES: tuple[TaskProfile, ...] = (
     # the hardest negative in the corpus -- three times the labeler's 0.094 noise floor, and every
     # cheap signal will be screaming through it. Its failure cells are worth more as negatives than
     # its hard-negative cells are.
-    TaskProfile("countdown_lite", {"max_numbers": 5}, 3, (2, 5), 12000, 0.445),
+    TaskProfile(
+        "countdown_lite", {"max_numbers": 5}, 3, (2, 5), 12000, 0.445, expects_collapse=False
+    ),
     # Groks: 0.105 at 2500 supervised steps and 1.000 at 7000 on a single difficulty. Over a range
     # it needs more still, so this ceiling sits far past the transition.
     TaskProfile(
@@ -350,6 +368,7 @@ def make_grid(
     seed0: int = 0,
     onset_seed: int = 20260801,
     roles: bool = True,
+    include_excluded_seeds: bool = False,
 ) -> list[RunSpec]:
     """The full corpus grid: tasks x cells x seeds.
 
@@ -361,10 +380,18 @@ def make_grid(
     Every run is the same length. Shorter healthy runs would give them fewer opportunities to raise
     a false alarm, which makes the false-alarm rate optimistic for free.
 
-    `roles=False` ignores `TaskProfile.role`, `seed_scale` and `excluded_seeds`, and gives the
-    uniform tasks x cells product over contiguous seeds. That is the diagnostic view -- it is how a
-    demotion gets re-examined, and how `--smoke` asks "does this knob do anything on this task"
-    about a task the grid no longer carries. It is never the corpus.
+    `roles=False` ignores `TaskProfile.role` and `seed_scale` and gives the uniform tasks x cells
+    product. That is the diagnostic view -- it is how a demotion gets re-examined, and how `--smoke`
+    asks "does this knob do anything on this task" about a task the grid no longer carries. It is
+    never the corpus.
+
+    `excluded_seeds` is deliberately *not* part of that, and the separation was bought the hard way.
+    When `roles=False` also un-excluded seeds, the smoke gate ran all 32 ca_rule cells on seed 0 --
+    the one seed disqualified for finishing its warm start at 0.055 -- and every cell peaked near
+    0.13, including the control. The gate duly reported "no failure family collapsed at all; every
+    dose is too weak", which is exactly the sentence that would have got ca_rule dropped. A dud
+    initialization is not a diagnostic condition, it is noise, so it stays excluded unless
+    `include_excluded_seeds` asks for it by name.
     """
     rng = np.random.default_rng(onset_seed)
     by_family = SEEDS_BY_FAMILY if seeds_by_family is None else seeds_by_family
@@ -373,9 +400,7 @@ def make_grid(
         profile = PROFILE_BY_TASK[task]
         task_specs = cells_for(profile, specs) if roles else specs
         scale = profile.seed_scale if roles else 1
-        # Under `roles=False` the excluded seeds come back too: that path exists to re-examine a
-        # judgement, and a seed cannot be re-examined if the grid refuses to emit it.
-        source = profile if roles else replace(profile, excluded_seeds=())
+        source = replace(profile, excluded_seeds=()) if include_excluded_seeds else profile
         for spec in task_specs:
             for seed in seeds_for(source, by_family.get(spec.family, seeds) * scale, seed0):
                 onset = sample_onset(rng) if spec.needs_onset else None
