@@ -18,10 +18,12 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from testbed.corpus.manifest import (  # noqa: E402
+    CORPUS_TASKS,
     PROFILE_BY_TASK,
     PROFILES,
     TASKS,
     RunSpec,
+    TaskRole,
     build_config,
     build_task,
     make_grid,
@@ -143,10 +145,86 @@ def test_run_ids_are_unique() -> None:
     assert len(ids) == len(set(ids))
 
 
-def test_every_cell_is_present_for_every_task() -> None:
+def test_every_cell_is_present_for_every_corpus_task() -> None:
+    """Every carried task carries the whole taxonomy.
+
+    Stated over `CORPUS_TASKS` rather than `TASKS` because a task can be excluded, but never
+    partially included: dropping a task's failure cells because they came out negative would select
+    the grid on its own outcomes and delete its hardest negatives. Measured -- countdown_lite
+    collapses in none of its 29 cells and is carried at full breadth anyway.
+    """
     grid = make_grid()
     cells = {(s.task, s.family, s.dose) for s in grid}
-    assert len(cells) == len(TASKS) * len(ALL_SPECS)
+    assert len(cells) == len(CORPUS_TASKS) * len(ALL_SPECS)
+    assert set(CORPUS_TASKS) <= set(TASKS)
+
+
+def test_excluded_tasks_are_out_of_the_grid_but_still_implemented() -> None:
+    """An exclusion is a corpus decision, not a deletion. The task stays constructible and tested,
+    so the judgement can be re-examined with `roles=False` rather than from a commit message."""
+    excluded = [p for p in PROFILES if p.role is TaskRole.EXCLUDED]
+    assert excluded, "the exclusion machinery is untested if nothing is excluded"
+    for p in excluded:
+        assert p.task in TASKS
+        assert not [s for s in make_grid() if s.task == p.task]
+        assert [s for s in make_grid(tasks=(p.task,), roles=False)]
+
+
+def test_every_non_default_role_carries_its_evidence() -> None:
+    """A task is demoted by a measurement or not at all, and the measurement travels with it."""
+    for p in PROFILES:
+        if p.role is not TaskRole.FULL or p.seed_scale != 1:
+            assert len(p.role_reason) > 80, f"{p.task}: {p.role.value} with no stated evidence"
+
+
+def test_seeds_that_never_warm_started_into_band_are_substituted_not_dropped() -> None:
+    """A seed whose warm start finished under `TARGET_BAND` has no headroom for anything to collapse
+    through -- measured, every ca_rule seed-0 run peaked between 0.09 and 0.24 against a 0.25 floor.
+    Excluding it is selection on initialization, decided before any knob is applied.
+
+    Substituting the next seed rather than shrinking the cell is what keeps every cell at the same
+    sample size, which is the unit the false-alarm calibration is stated over.
+    """
+    grid = make_grid()
+    per_cell = Counter((s.task, s.family, s.dose) for s in grid)
+    excluded = [p for p in PROFILES if p.excluded_seeds]
+    assert excluded, "the substitution machinery is untested if nothing is excluded"
+
+    for profile in excluded:
+        used = {s.seed for s in grid if s.task == profile.task}
+        assert not used & set(profile.excluded_seeds), f"{profile.task} used an excluded seed"
+        # The seed range runs past the count by exactly the number of exclusions inside it: that is
+        # substitution rather than a cell quietly losing seeds.
+        assert max(used) == len(used) - 1 + sum(s <= max(used) for s in profile.excluded_seeds)
+
+        # And a cell of this task is the same size as the same cell elsewhere, scale aside.
+        for (task, family, dose), n in per_cell.items():
+            if task != profile.task:
+                continue
+            others = [
+                v for (t, f, d), v in per_cell.items() if (f, d) == (family, dose) and t != task
+            ]
+            assert all(n == v * profile.seed_scale for v in others), (
+                f"{profile.task}/{family}/{dose}"
+            )
+
+
+def test_out_of_band_seeds_survive_roles_being_switched_off() -> None:
+    """`roles=False` must not un-exclude seeds, and this is a regression test with a scar.
+
+    When it did, the smoke gate ran all 32 ca_rule cells on seed 0 -- disqualified for finishing its
+    warm start at 0.055 -- every cell peaked near 0.13 including the control, and the gate reported
+    "no failure family collapsed at all; every dose is too weak". That is the sentence that gets a
+    task dropped, produced by an initialization rather than by any dose.
+    """
+    profile = next(p for p in PROFILES if p.excluded_seeds)
+    for kwargs in ({}, {"roles": False}):
+        seen = {s.seed for s in make_grid(tasks=(profile.task,), **kwargs)}  # type: ignore[arg-type]
+        assert not seen & set(profile.excluded_seeds), f"excluded seed emitted under {kwargs}"
+
+    # Asking by name is the only way to get one back.
+    back = {s.seed for s in make_grid(tasks=(profile.task,), include_excluded_seeds=True)}
+    assert back & set(profile.excluded_seeds), "no way left to re-examine an exclusion"
 
 
 def test_seeds_within_a_cell_do_not_share_an_onset() -> None:
@@ -170,12 +248,21 @@ def test_negative_classes_are_densely_sampled() -> None:
     """
     grid = make_grid()
     per_cell = Counter((s.task, s.family, s.dose) for s in grid)
-    healthy_seeds = min(v for (_, f, _), v in per_cell.items() if f == "F0")
-    failure_seeds = max(v for (_, f, _), v in per_cell.items() if f.startswith("F") and f != "F0")
-    assert healthy_seeds >= 3 * failure_seeds
 
-    for h in ("H2", "H3", "H4", "H5"):
-        assert min(v for (_, f, _), v in per_cell.items() if f == h) >= 10
+    # Per task, not across tasks. `seed_scale` makes tasks different sizes on purpose, so a
+    # cross-task comparison would read ca_rule's doubled failure cells against sort_digits'
+    # unscaled control and call a deliberate imbalance a bug. What has to hold is that scaling
+    # preserves the negative-to-positive *shape* inside each task, since that ratio is what the
+    # false-alarm calibration depends on.
+    for task in CORPUS_TASKS:
+        healthy = min(v for (t, f, _), v in per_cell.items() if t == task and f == "F0")
+        failure = max(
+            v for (t, f, _), v in per_cell.items() if t == task and f.startswith("F") and f != "F0"
+        )
+        assert healthy >= 3 * failure, f"{task}: {healthy} control seeds against {failure}"
+
+        for h in ("H2", "H3", "H4", "H5"):
+            assert min(v for (t, f, _), v in per_cell.items() if t == task and f == h) >= 10
 
     # F0 is the only family that is negative by construction; H2-H5 are *intended* negatives whose
     # actual labels are decided afterwards from held-out accuracy, and some of them will collapse.
