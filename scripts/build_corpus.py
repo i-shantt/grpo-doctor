@@ -31,7 +31,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from grpo_doctor.eval.labels import LabelConfig, label_run  # noqa: E402
-from testbed.corpus.manifest import RunSpec, make_grid, write_manifest  # noqa: E402
+from testbed.corpus.manifest import (  # noqa: E402
+    PROFILE_BY_TASK,
+    PROFILES,
+    RunSpec,
+    TaskRole,
+    make_grid,
+    write_manifest,
+)
 from testbed.corpus.runner import (  # noqa: E402
     read_trace,
     run_grid,
@@ -64,10 +71,20 @@ def smoke(args: argparse.Namespace) -> int:
             seeds=args.seeds,
             steps=args.steps,
             seeds_by_family={},
+            # Roles off: this is the diagnostic that *decides* a role, so it must be able to run a
+            # task the grid excludes and a family the grid would skip. With roles on, smoking an
+            # excluded task would silently execute zero runs and report a clean gate.
+            roles=False,
         )
     out_dir = Path(args.out) / "smoke"
 
-    print(f"smoke: {len(specs)} runs x {args.steps} steps on {args.task}\n")
+    profile = PROFILE_BY_TASK[args.task]
+    role = f"  [role: {profile.role.value}"
+    role += f", seed_scale {profile.seed_scale}]" if profile.seed_scale != 1 else "]"
+    print(f"smoke: {len(specs)} runs x {args.steps} steps on {args.task}{role}")
+    if profile.role_reason:
+        print(f"  {profile.role_reason}")
+    print()
     started = time.time()
     outcomes = run_grid(specs, out_dir, workers=args.workers, overwrite=args.overwrite)
     summary = summarize(outcomes)
@@ -130,6 +147,14 @@ def full(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     write_manifest(str(out_dir / "manifest.jsonl"), specs)
     print(f"{len(specs)} runs -> {out_dir}")
+    by_task = Counter(s.task for s in specs)
+    for task, n in by_task.most_common():
+        profile = PROFILE_BY_TASK[task]
+        cells = len({(s.family, s.dose) for s in specs if s.task == task})
+        print(f"  {task:16s} {n:4d} runs  {cells:2d} cells  x{profile.seed_scale} seeds")
+    excluded = [p.task for p in PROFILES if p.role is TaskRole.EXCLUDED]
+    if excluded:
+        print(f"  excluded: {', '.join(excluded)}  (see TaskProfile.role_reason)")
     if args.manifest_only:
         print(dict(Counter(s.family for s in specs)))
         return 0
@@ -150,7 +175,13 @@ def main() -> int:
     p.add_argument("--full", action="store_true")
     p.add_argument("--manifest-only", action="store_true")
     p.add_argument("--task", default="sort_digits")
-    p.add_argument("--steps", type=int, default=400)
+    # Resolved per mode below rather than shared. A single default is a trap here: 400 steps is the
+    # right length for a ten-minute gate and the wrong length for the corpus, and the failure is
+    # silent -- the grid runs, every trace parses, and every run is a third shorter than the one the
+    # lead-time numbers were budgeted for.
+    p.add_argument(
+        "--steps", type=int, default=None, help="default: 400 for --smoke, 600 for --full"
+    )
     p.add_argument("--seeds", type=int, default=1, help="seeds per cell; >1 gives collapse RATES")
     p.add_argument("--workers", type=int, default=None)
     p.add_argument("--out", default="corpus")
@@ -158,8 +189,10 @@ def main() -> int:
     args = p.parse_args()
 
     if args.smoke:
+        args.steps = 400 if args.steps is None else args.steps
         return smoke(args)
     if args.full or args.manifest_only:
+        args.steps = 600 if args.steps is None else args.steps
         return full(args)
     p.error("choose one of --smoke, --full, --manifest-only")
     return 2
