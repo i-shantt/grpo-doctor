@@ -122,22 +122,35 @@ def smoke(args: argparse.Namespace) -> int:
     print(f"\n{json.dumps(summary['by_status'])}  wall {time.time() - started:.0f}s")
 
     # The gate. Not "did every knob collapse" -- a dose that does nothing is a legitimate negative --
-    # but the two conditions that would make the grid worthless.
+    # but the conditions that would make the grid worthless.
     problems = []
     healthy_control = labels.get("F0/none")
     if healthy_control != "healthy":
         problems.append(f"F0 control was labeled {healthy_control!r}, not healthy")
-    if not any(v != "healthy" for k, v in labels.items() if k.startswith("F")):
-        problems.append("no failure family collapsed at all; every dose is too weak")
     if summary["by_status"].get("crashed"):
         problems.append(f"crashed runs: {summary['crashed_ids']}")
+
+    # Collapse is checked against what the profile says to expect, in both directions. A task that
+    # was never going to collapse is not a fresh problem every run -- countdown_lite has now been
+    # measured four separate ways, including at the two most violent knobs in the taxonomy -- and a
+    # gate that reports it anyway is a standing false alarm that teaches you to skim past the line
+    # where a real one will appear. But a task recorded as not collapsing that *does* is news, and
+    # gets the same treatment.
+    collapsed = sum(1 for k, v in labels.items() if k.startswith("F") and v != "healthy")
+    if profile.expects_collapse and not collapsed:
+        problems.append("no failure family collapsed at all; every dose is too weak")
+    elif not profile.expects_collapse and collapsed:
+        problems.append(
+            f"{collapsed} cell(s) collapsed on a task recorded as never collapsing -- either the "
+            "taxonomy changed or TaskProfile.expects_collapse is now wrong"
+        )
 
     print()
     for p in problems:
         print(f"PROBLEM: {p}")
     if not problems:
-        collapsed = sum(1 for k, v in labels.items() if k.startswith("F") and v != "healthy")
-        print(f"OK: control is healthy, {collapsed} failure cells collapsed")
+        expected = "" if profile.expects_collapse else " (none expected, and none is what happened)"
+        print(f"OK: control is healthy, {collapsed} failure cells collapsed{expected}")
     return 1 if problems else 0
 
 
