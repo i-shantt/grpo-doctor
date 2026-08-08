@@ -214,12 +214,14 @@ PROFILES: tuple[TaskProfile, ...] = (
     # reproduce the ca_rule failure in miniature -- a policy can specialise on problems nobody
     # measures, and the probe reads the resulting drift as collapse. See `train.probe_difficulties`.
     TaskProfile("sort_digits", {"max_digits": 6}, 5, (4, 6), 12000, 0.312),
-    # countdown_lite is kept at full breadth despite contributing no positives, and that is the
-    # point. 0 collapses in 29 cells x 2 seeds, but re-running the three most violent knobs showed
-    # it is resilient rather than floored: F8/none_unclipped fell 0.551 -> 0.254 and came back,
-    # F3/mu8_hot 0.547 -> 0.352 and came back, both inside the H=50 persistence window. A drawdown
-    # of 0.30 that recovers is the hardest negative in the corpus. Its failure cells are worth more
-    # as negatives than its hard-negative cells are.
+    # Resistant, but no longer inert. It survived 29 cells x 2 seeds and the three most violent
+    # knobs in the taxonomy -- F8/none_unclipped fell 0.551 -> 0.254 and came back, F3/mu8_hot
+    # 0.547 -> 0.352 and came back, both inside the H=50 window -- which is what makes its failure
+    # cells the hardest negatives available. Under the corrected probe it does collapse, but only
+    # to the shaped leak: F5/format_p70_terse took it 0.273 -> 0.156, a drawdown of 0.117 against
+    # a 0.084 threshold at that peak. Shallow, consistent with the probe audit finding 30% of its
+    # exploit outputs valid by coincidence, and exactly the kind of marginal collapse a detector
+    # evaluated only on total ones would never be tested against.
     TaskProfile(
         "countdown_lite",
         {"max_numbers": 5},
@@ -227,7 +229,6 @@ PROFILES: tuple[TaskProfile, ...] = (
         (4, 5),
         12000,
         0.254,
-        expects_collapse=False,
         # Measured under the corrected probe: 16 of 18 seeds reached the band at a median 6300
         # supervised steps. These two spent the whole ceiling and stopped at 0.199 and 0.188.
         excluded_seeds=(13, 14),
