@@ -12,121 +12,118 @@ moves; it is not a changelog.
 - **Package** (`src/grpo_doctor/`) — `StepRecord`, `Monitor`, signal panel, the `t_collapse` labeler,
   evaluation metrics with run-level cluster bootstrap and exact McNemar, a TRL `TrainerCallback`,
   and a `replay`/`label` CLI. **numpy-only**; CI asserts `torch` never enters `sys.modules`.
-- **371 tests**, `mypy --strict` clean, CI green on Python 3.10–3.13 and macOS.
-- Probe false-accept audit passes: every leak fully exploitable, and `ca_rule`'s 5.6% residual is
-  pinned to an exact identity (rotation is the identity precisely on constant rows) rather than to a
-  tolerance someone chose.
+- **377 tests**, `mypy --strict` clean, CI green on Python 3.10–3.13 and macOS.
 
-## The corpus grid, and why it has the shape it has
+## The probe was measuring two problems
 
-772 runs over three tasks. Every decision below is a measurement, and each one is recorded next to
-the thing it decided (`TaskProfile.role_reason`, the F5 comment block in `inject/failures.py`) so it
-can be re-examined rather than taken on faith.
+The largest finding of the corpus work, and it invalidated a task that had been reported as the best
+one. `t_collapse` sets its threshold at `δ = 3·SE` with `SE = √(p̂(1−p̂)/N)`, `N = 256` — which
+assumes **256 independent held-out problems**. The held-out split is a hash bucket, 1 prompt in 16.
+Nobody had checked how many prompts that leaves.
 
-| task | role | runs | why |
+| task | difficulty | problem space | **distinct probe problems** |
 |---|---|---|---|
-| `ca_rule` | full, **×2 seeds** | 386 | 6 collapsing cells of 26 against a healthy control. The only reliable source of positives, and lead time is undefined without them. |
-| `sort_digits` | full | 193 | 2 reliably collapsing cells, healthy control 3/3. |
-| `countdown_lite` | full | 193 | **0 collapses in 29 cells** — carried anyway, see below. |
-| `modarith` | **excluded** | 0 | Its F0 control STALLs on 1 of 2 seeds. |
+| `ca_rule` | 3 / 4 / 5 / 6 | 8 / 16 / 32 / 64 | **1 / 1 / 2 / 4** |
+| `sort_digits` | 4 | 10,000 | 625 |
+| `countdown_lite` | 4 | 6,561 | 410 |
 
-**`modarith` is out.** A broken *control* is the one defect no downstream analysis absorbs: there is
-no baseline to measure a failure against and no trustworthy negatives to calibrate a false-alarm
-rate on. The cause is grokking — warm start lands both seeds at the very bottom of the band (0.258,
-0.262 against a 0.25 floor) after 10–11k supervised steps, because the accuracy curve crosses the
-whole band almost vertically and the stopping rule catches it in transit. The task stays implemented
-and tested; `make_grid(roles=False)` still runs it, so the judgement is re-checkable.
+`ca_rule` has a binary alphabet, so width *w* admits only 2^w rows. Its probe drew 256 samples from
+**two** distinct problems. Forgetting one moves measured accuracy by 0.5 — five times the collapse
+threshold — so ordinary drift on two instances registered as a collapse.
 
-What that costs is stated rather than waved away: modarith was carried for a reward hack that
-collapses completion length, so the length baseline now has a thinner set of positives to be right
-about. A claim in `modarith.py`'s docstring — that sort_digits' leak leaves length untouched while
-modarith's collapses it — turned out to be **false for the doses actually in the grid**. The
-`6.95 → 2.00` length collapse cited in `tasks/base.py` was measured under the *full* leak, which now
-freezes training instead of hacking it.
+Measured consequences, all from the finished 579-run corpus:
 
-**`countdown_lite` stays at full breadth despite contributing no positives**, and that is the
-interesting decision. Re-running the three most violent knobs in the taxonomy showed it is
-*resilient*, not floored: `F8/none_unclipped` fell 0.551 → 0.254 and recovered, `F3/mu8_hot` fell
-0.547 → 0.352 and recovered, both inside the H=50 persistence window. A 0.30 drawdown that recovers
-is three times the labeler's 0.094 noise floor with every cheap signal screaming through it — the
-hardest negative in the corpus. Dropping its failure cells *because* they came out negative would
-select the grid on its own outcomes and delete exactly the runs that are hardest to get right.
+- **3 of 54 F0 controls labeled positive**, with no leak and no knob applied. A 5% false-alarm
+  operating point is incoherent when the ground truth fires at 5.6%.
+- **29 of 39 `ca_rule` positives were artifacts** — strict-verifier accuracy on the *training*
+  distribution was rising while the probe fell, meaning the policy had genuinely improved. A hacking
+  policy would fail `verify_true` on training problems too, so rising `train_true` rules hacking out.
+- A per-difficulty profile of 0.000 / 0.010 / 0.245 / 0.021 — a spike at exactly the probed width,
+  not a difficulty gradient. The warm start halts on the first crossing of the probe it is later
+  labeled by, so it selects checkpoints caught at a favourable fluctuation on the labeling oracle
+  itself. RL then regresses to the mean, and the probe calls it collapse.
 
-## F5 did not Goodhart, and it was arithmetic rather than a weak dose
+Pinning `ca_rule` to a single width does not help — two problems is still two problems, and controls
+still collapsed 2 of 4. **The task is excluded.** It remains implemented and is kept as the
+regression case for the guard below.
 
-The reward-hacking family is the project's headline — the mode a reward-watching practitioner is
-structurally blind to. Measured across both live tasks at two seeds, three of its four doses never
-fired: `structure_p40`, `structure_p70` and `format_p40` were **healthy 2/2 on sort_digits** while
-training reward climbed 0.51 → 0.91, held-out accuracy stayed flat, and mean length did not move.
+### Three guards, each of which would have caught it
 
-That is not tuning slack. Every leak in the ladder accepts a **superset** of the correct answers, so
-a correct completion still scores 1.0 on a leaked problem and abandoning correctness can only lose:
+1. Every probed difficulty must supply at least as many distinct held-out problems as samples drawn
+   from it. `ca_rule` fails by construction and `probe_difficulties` raises rather than degrading.
+2. **Training range must equal probed range exactly.** The old test only required the probe point to
+   be *inside* the training range, which is what allowed a policy to specialise where nobody was
+   measuring.
+3. The probe budget is spent in full, so narrowing never silently shrinks `N` and the noise floor
+   behind `δ` stays honest.
 
-```
-E[always correct] = 1.0        E[always exploit] = leak_p
-```
+Guard 2 is why `sort_digits` now trains on 4–6 rather than 2–6 and `countdown_lite` on 4–5:
+difficulties 2 and 3 are trainable but not *labelable*, holding 6 and 62 distinct held-out prompts.
 
-The exploit is dominated at every `leak_p < 1`, and at `leak_p = 1` the two tie — which is the
-zero-variance freeze `VerifierConfig.leak_p` already documents. **No dose of a bare superset leak
-produces Goodhart**, so pushing `leak_p` harder was never going to find one.
+## Families that could not have fired, for reasons in the algebra
 
-A negative length bonus breaks the tie, because the exploit is one token and the answer is not:
+Three families had doses that were provably inert. Each would otherwise have been written up as
+*"GRPO resists this pathology"* — a claim about the algorithm — when the truth was a claim about our
+knob.
 
-```
-correct ~ 1 + bonus·len(answer)      exploit ~ 1 + bonus·1
-```
+**F5 (verifier leakage).** Every leak accepts a *superset* of the correct answers, so a correct
+completion still scores 1.0 on a leaked problem: `E[always correct] = 1.0` against
+`E[always exploit] = leak_p`. The exploit is dominated at every `leak_p < 1` and ties at 1, which is
+the zero-variance freeze. Measured: `structure_p40`, `structure_p70`, `format_p40` all healthy 2/2
+while reward climbed 0.51 → 0.91.
 
-The shaped doses are now in the grid (`structure_p70_terse`, `structure_full_terse`,
-`format_p70_terse`), and they produce the signature the whole project exists to catch. On
-sort_digits, `structure_full_terse` is HACK 2/2: held-out accuracy 0.41 → **0.000**, mean length
-4.46 → 2.00, and training reward **rising** 0.512 → 0.923. On ca_rule the strongest cell is
-`format_p70_terse` (3 of 4 seeds to 0.000–0.010), because ca_rule's STRUCTURE leak grades a
-population count and so cannot be exploited by a short answer — only FORMAT frees the length.
+*Fixed.* A negative length bonus breaks the tie, since the exploit is one token and the answer is
+not, and it restores reward variance at `leak_p = 1`. `structure_full_terse` is now HACK 2/2 on
+sort_digits: held-out accuracy 0.41 → **0.000**, mean length 4.46 → 2.00, training reward **rising**
+0.512 → 0.923. The unshaped doses are kept as honest negatives.
 
-The bonus also restores reward variance at `leak_p = 1`, so the full-leak case now hacks instead of
-freezing. The four unshaped doses are **kept**: they are honest negatives with a mechanism behind
-them, and they are the corpus's cleanest example of a knob that fires and changes nothing.
+**F6 (length hacking) and H5.** Group standardization is invariant to positive affine transforms of
+the reward: `(c·x − mean)/std = (x − mean)/std`. Under a strict verifier a correct completion *is*
+the answer, so every correct completion in a group has the same length and the same bonus — the term
+cancels exactly. Verified: advantages agree to five decimals across bonuses of ±0.05 and +0.5. **H5
+is a duplicate of F0**, which matters because FAR broken out by hard-negative type is a headline
+commitment and it has three real types, not four.
 
-One mechanism note worth keeping, because it is not obvious: `leaks_for` hashes the prompt, so the
-policy cannot tell a leaked problem from a strictly graded one. An exploit that pays on 70% of
-problems is therefore generalized to all of them. **A partial leak does not produce partial
-hacking.**
+**F8 (normalization).** For *binary* rewards, max |A| is 0.875 under `scale_rewards="none"` against
+2.474 under `"group"` — removing per-group normalization makes updates **gentler**. The
+"|A| is unbounded" claim holds only for unbounded rewards, which binary verification never supplies.
 
-## The open problem
+Both are pinned by property tests in `tests/test_advantage_bound.py`.
 
-**Warm starts do not reliably reach the trainable band, and `ca_rule` is the worst offender.**
-Measured so far: sort_digits 15/15 in band at a median 500 supervised steps, countdown_lite 2/2 at
-500, `ca_rule` **1 of 2** on the first pair — seed 0 spent its entire 12000-step ceiling and finished
-at **0.055** against a 0.25 floor.
+## The corpus
 
-That is not a cosmetic miss. Every ca_rule seed-0 run in the F5 probe peaked at 0.09–0.24, so the
-labeler could never have seen a meaningful drawdown: the cell becomes a negative for a reason that
-has nothing to do with the knob, which is precisely the initialization confound `TARGET_BAND` exists
-to remove. It is also the same failure that disqualified modarith, one notch less severe, on the
-task carrying half the corpus.
+386 runs over two tasks. A previous 579-run corpus completed cleanly (zero crashes, 266 min) and was
+discarded when the probe defect was found — its `sort_digits` half is sound but the labels move under
+the corrected probe, so mixing definitions was not an option.
 
-`scripts/build_warmstarts.py` builds all 72 of them in parallel and reports the per-task hit rate
-before the grid runs — both because it is shared work (a warm start is keyed by task/difficulty/seed
-and all 32 of a seed's cells load the same checkpoint, so on demand six workers train it six times
-and discard five) and because the hit rate is a property of the corpus worth knowing in advance.
+| task | role | why |
+|---|---|---|
+| `sort_digits` | full | 625 distinct probe problems at d=4; the only source of positives |
+| `countdown_lite` | full, `expects_collapse=False` | 0 collapses in 29 cells, but resilient rather than floored: 0.551 → 0.254 and back inside the H=50 window. Its failure cells are the hardest negatives available. |
+| `ca_rule` | **excluded** | probe holds 1–4 distinct problems |
+| `modarith` | **excluded** | F0 control STALLs on 1 of 2 seeds |
+
+`countdown_lite`'s failure cells are kept deliberately. Dropping cells *because* they came out
+negative would select the grid on its own outcomes, which `docs/NEGATIVE_RESULTS.md` pre-registered
+against.
 
 ## What that implies
 
-Unchanged, and now better supported: if the pattern holds, the honest headline is the negative
-result — a testbed with 29 induced pathologies and a labeler whose threshold is *derived* rather
-than chosen, finding that GRPO at a sane learning rate resists most of them. That shape was
-pre-registered in `docs/NEGATIVE_RESULTS.md` **before any of it ran**. Two things sharpen it now:
-`countdown_lite` resists every knob in the taxonomy while dipping 0.30 and recovering, and F5's
-failure to fire was traced to an argument rather than left as a shrug.
+Genuine positives are roughly 23, all from `sort_digits`, concentrated in F5 and F3. That is thin for
+leave-one-mode-out and it is exactly Outcome 2 in `docs/NEGATIVE_RESULTS.md`, which was written
+before any of this ran. The honest headline remains the negative result, now better supported:
+`countdown_lite` resists every knob in the taxonomy while dipping 0.30 and recovering, and three
+families' silence was traced to arithmetic rather than left as a shrug.
 
-Separately, on `sort_digits` only two of 26 conditions collapsed GRPO at all, and that survived a
-direct test: at 1500 steps rather than 600, six silent families stayed silent, so the
-right-censoring explanation is falsified rather than merely unlikely.
+The README must say plainly that two of four tasks were disqualified, and why — a probe too small to
+measure anything is a mistake worth publishing, since it is invisible in every downstream number and
+would have produced a confident, wrong result.
 
 ## Next
 
-1. Finish the warm-start pass; record which seeds land in band and exclude the ones that do not.
-2. Smoke the rebalanced grid, then generate it. Measured cost: 93 s/run at 600 steps and ~130 s for
-   the heavier cells, so 772 runs on 6 workers is **3–4h**, not the 2h previously assumed.
-3. Fit and evaluate the detector ladder R0→R3 against the four negative controls under
+1. Rebuild warm starts under the corrected probe; record the real `measured_accuracy` per task.
+2. Smoke the two-task grid, then regenerate (386 runs, ~2h).
+3. Diagnose the remaining silent families (F4, F7, F9) the way F5/F6/F8 were — derive the effect on
+   the advantage first, spend compute only where the arithmetic says a dose can work.
+4. Fit and evaluate the detector ladder R0→R3 against the four negative controls under
    leave-one-mode-out, reporting lead time at a fixed 5% false-alarm rate.

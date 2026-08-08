@@ -128,3 +128,70 @@ def test_trl_isclose_misses_groups_our_acr_catches() -> None:
     _, metrics = compute_advantages(rewards, cfg)
     assert metrics["frac_reward_zero_std"] == 0.0, "TRL's key should call this healthy"
     assert metrics["acr"] == 1.0, "our ACR should flag it"
+
+
+def test_group_scaling_annihilates_a_shaping_term_constant_within_a_group() -> None:
+    """Group standardization is invariant to positive affine transforms of the reward.
+
+    `(c*x - mean(c*x)) / std(c*x) == (x - mean(x)) / std(x)` for any `c > 0`, so a shaping term
+    that takes the same value for every member of a group has *exactly* no effect on the gradient.
+
+    This is not a curiosity. It is why F6 (length hacking) and H5 (legitimate length growth) were
+    measured producing nothing: under a strict verifier a correct completion *is* the answer, so
+    every correct completion in a group has the same length and therefore the same length bonus.
+    The knob moves the reward the practitioner watches and moves the policy not at all.
+
+    The corollary is the design rule for any shaping term in this testbed: it only bites if it
+    varies *within* a group, which requires a verifier that accepts variable-length output. That is
+    exactly why the F5 shaped-leak doses work -- STRUCTURE and FORMAT accept a one-token exploit
+    alongside a full-length answer, so the bonus separates them.
+    """
+    correct = torch.tensor([[1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+    # (bonus, answer length) pairs spanning F6/verbose, F6/terse and H5/longer, plus one far past
+    # any dose in the grid to show the invariance is structural rather than a small-effect artifact.
+    doses = ((0.05, 4), (-0.05, 4), (0.02, 6), (0.5, 3))
+
+    # Exact where the algebra is exact: `advantage_eps` is the only thing that breaks it.
+    exact = GRPOConfig(group_size=8, advantage_eps=0.0)
+    baseline, _ = compute_advantages(correct, exact)
+    for bonus, length in doses:
+        adv, _ = compute_advantages(correct * (1.0 + bonus * length), exact)
+        assert torch.allclose(adv, baseline, atol=1e-6), (
+            f"bonus={bonus} len={length} changed the advantage; it must not"
+        )
+
+    # Under the shipped epsilon the cancellation is inexact by exactly the eps term, which damps a
+    # small denominator slightly more than a large one. Bounded and negligible, but not zero -- and
+    # asserting an exact match at the default config would be asserting something untrue.
+    shipped = GRPOConfig(group_size=8)
+    baseline, _ = compute_advantages(correct, shipped)
+    for bonus, length in doses:
+        adv, _ = compute_advantages(correct * (1.0 + bonus * length), shipped)
+        drift = float((adv - baseline).abs().max())
+        assert drift < 1e-3, f"bonus={bonus} len={length} drifted {drift}"
+
+
+def test_removing_group_scaling_shrinks_binary_advantages_rather_than_growing_them() -> None:
+    """For *binary* rewards, `scale_rewards="none"` is gentler than `"group"`, not harsher.
+
+    The unboundedness in `test_batch_and_none_scaling_are_genuinely_unbounded` is a statement about
+    reward *magnitude*, and a verifier that returns 0 or 1 never supplies any. Centering leaves
+    |A| <= 1, while group scaling divides by a within-group std that is below 1 for every mixed
+    composition and so amplifies.
+
+    Recorded because it is the opposite of the intuition F8 was built on: at these reward scales
+    the family is a stability improvement wearing an instability's name.
+    """
+    worst = {}
+    for mode in ("group", "batch", "none"):
+        cfg = GRPOConfig(group_size=8, scale_rewards=mode)  # type: ignore[arg-type]
+        peak = 0.0
+        for k in range(1, 8):
+            rewards = torch.zeros(1, 8)
+            rewards[0, :k] = 1.0
+            peak = max(peak, float(compute_advantages(rewards, cfg)[1]["advantage_abs_max"]))
+        worst[mode] = peak
+
+    assert worst["none"] < 1.0
+    assert worst["group"] > 2.0
+    assert worst["none"] < worst["group"] / 2.0

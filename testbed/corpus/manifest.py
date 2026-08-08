@@ -191,32 +191,46 @@ PROFILES: tuple[TaskProfile, ...] = (
         (3, 6),
         12000,
         0.277,
-        # Measured by scripts/build_warmstarts.py over 30 seeds: 20 reached the band, 10 spent the
-        # whole 12000-step ceiling and finished at 0.012-0.145 -- far under the 0.25 floor, with no
-        # headroom for anything to collapse through. A one-in-three initialization failure rate is
-        # the highest of any carried task, and it is the expensive third: a miss always costs the
-        # full ceiling (~1000s) where a hit averages ~800s.
-        excluded_seeds=(0, 8, 11, 12, 13, 19, 25, 26, 27, 28),
+        role=TaskRole.EXCLUDED,
         role_reason=(
-            "Carried at single weight. It was briefly doubled -- positives are the scarce resource "
-            "and ca_rule had 6 collapsing cells of 26 against sort_digits' 2 and countdown_lite's "
-            "0 -- but both halves of that argument moved. The F5 shaped-leak doses gave sort_digits "
-            "four more collapsing cells at 2/2 seeds, so positives no longer come from one task; "
-            "and at a 33% warm-start miss rate, doubling ca_rule meant 36 in-band seeds where only "
-            "20 of the first 30 qualified, buying ~180 runs for one to two hours of supervised "
-            "training that produces nothing. 18 in-band seeds were already in hand."
+            "Its held-out probe contains one to four distinct problems, so it cannot be labeled. "
+            "A binary alphabet admits only 2**w rows, and the 1-in-16 hash split leaves 1 problem "
+            "at width 3, 1 at width 4, 2 at width 5 and 4 at width 6 -- against a probe that draws "
+            "256 samples and a threshold, delta = 3*SE, derived assuming 256 independent ones. "
+            "Losing a single problem moves measured accuracy by up to 0.5, five times the collapse "
+            "threshold, so the probe reports drift on two instances as a collapse. Measured: 3 of "
+            "54 F0 controls labeled positive with no knob applied; 29 of 39 positives showing "
+            "*rising* strict accuracy on the training distribution, meaning the policy had got "
+            "better at the task; and a per-difficulty profile of 0.000 / 0.010 / 0.245 / 0.021 "
+            "that is a spike at the probed width rather than a difficulty gradient. Pinning the "
+            "width does not help -- 2 problems is still 2 problems, and controls still collapsed "
+            "2 of 4. This is prior to any question of doses or seeds: the task was contributing "
+            "the largest share of the corpus's positives and they were an artifact of the ruler."
         ),
     ),
-    TaskProfile("sort_digits", {"max_digits": 6}, 4, (2, 6), 12000, 0.348),
-    # Kept at full breadth despite contributing no positives, and that is the point. 0 collapses in
-    # 29 cells x 2 seeds, but re-running the three most violent knobs showed it is resilient rather
-    # than floored: F8/none_unclipped fell 0.551 -> 0.254 and came back, F3/mu8_hot 0.547 -> 0.352
-    # and came back, both inside the H=50 persistence window. A drawdown of 0.30 that recovers is
-    # the hardest negative in the corpus -- three times the labeler's 0.094 noise floor, and every
-    # cheap signal will be screaming through it. Its failure cells are worth more as negatives than
-    # its hard-negative cells are.
+    # Training range == probeable range, exactly. Difficulties 2 and 3 are trainable but not
+    # *labelable*: their held-out splits hold 6 and 62 distinct prompts against a probe that would
+    # draw 51 and 64 from them. Leaving them in training while the probe skipped them would
+    # reproduce the ca_rule failure in miniature -- a policy can specialise on problems nobody
+    # measures, and the probe reads the resulting drift as collapse. See `train.probe_difficulties`.
+    TaskProfile("sort_digits", {"max_digits": 6}, 5, (4, 6), 12000, 0.312),
+    # countdown_lite is kept at full breadth despite contributing no positives, and that is the
+    # point. 0 collapses in 29 cells x 2 seeds, but re-running the three most violent knobs showed
+    # it is resilient rather than floored: F8/none_unclipped fell 0.551 -> 0.254 and came back,
+    # F3/mu8_hot 0.547 -> 0.352 and came back, both inside the H=50 persistence window. A drawdown
+    # of 0.30 that recovers is the hardest negative in the corpus. Its failure cells are worth more
+    # as negatives than its hard-negative cells are.
     TaskProfile(
-        "countdown_lite", {"max_numbers": 5}, 3, (2, 5), 12000, 0.445, expects_collapse=False
+        "countdown_lite",
+        {"max_numbers": 5},
+        4,
+        (4, 5),
+        12000,
+        0.254,
+        expects_collapse=False,
+        # Measured under the corrected probe: 16 of 18 seeds reached the band at a median 6300
+        # supervised steps. These two spent the whole ceiling and stopped at 0.199 and 0.188.
+        excluded_seeds=(13, 14),
     ),
     # Groks: 0.105 at 2500 supervised steps and 1.000 at 7000 on a single difficulty. Over a range
     # it needs more still, so this ceiling sits far past the transition.

@@ -88,6 +88,10 @@ class CountdownLite:
             problems.append(Problem(prompt=row, answer=answer))
         return Batch(prompts=prompts, problems=tuple(problems))
 
+    def prompt_space_size(self, difficulty: int) -> int:
+        """Digits 1-9 per position: 9**k."""
+        return 9 ** int(np.clip(difficulty, 2, self.max_numbers))
+
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:
         """Any valid selection counts, not only the generated one."""
         if not completion:
