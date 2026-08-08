@@ -25,6 +25,7 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -60,14 +61,20 @@ def label_one(spec: dict[str, Any], recs: list[dict[str, float]], cfg: LabelConf
 def label_corpus(
     trace_dir: Path, task: str | None = None, cfg: LabelConfig | None = None
 ) -> list[dict[str, Any]]:
-    """One row per trace: its label, and -- for positives -- the artifact check's verdict."""
+    """One row per trace: its label, and -- for positives -- the artifact check's verdict.
+
+    `probe_every` always comes from the run's own spec, never from `cfg`. K is a property of how the
+    trace was generated, not a knob to sweep: a caller varying delta and H must not silently
+    reinterpret the probe spacing along with them, or the sensitivity table would be measuring two
+    things at once.
+    """
     rows: list[dict[str, Any]] = []
     pattern = f"{task}_*.jsonl.gz" if task else "*.jsonl.gz"
     for path in sorted(trace_dir.glob(pattern)):
         spec, recs = read_trace(path)
         if not recs:
             continue
-        run_cfg = cfg or LabelConfig(probe_every=spec.get("probe_every", 10))
+        run_cfg = replace(cfg or LabelConfig(), probe_every=spec.get("probe_every", 10))
         res = label_one(spec, recs, run_cfg)
         row: dict[str, Any] = {
             "run_id": spec["run_id"],
