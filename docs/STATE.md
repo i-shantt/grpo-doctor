@@ -62,9 +62,9 @@ difficulties 2 and 3 are trainable but not *labelable*, holding 6 and 62 distinc
 
 ## Families that could not have fired, for reasons in the algebra
 
-Three families had doses that were provably inert. Each would otherwise have been written up as
+Six families had doses that were provably inert. Each would otherwise have been written up as
 *"GRPO resists this pathology"* — a claim about the algorithm — when the truth was a claim about our
-knob.
+knob. Only F5's has been fixed so far; F4, F7 and F9 are derived and not yet re-dosed.
 
 **F5 (verifier leakage).** Every leak accepts a *superset* of the correct answers, so a correct
 completion still scores 1.0 on a leaked problem: `E[always correct] = 1.0` against
@@ -90,6 +90,41 @@ commitment and it has three real types, not four.
 
 Both are pinned by property tests in `tests/test_advantage_bound.py`.
 
+**F7 (reward noise).** Symmetric label noise is affine in expectation, `E[r'] = r(1−2p) + p`, so it
+scales the learning signal by exactly `(1−2p)`; measured correlation between noisy and clean
+advantages matches to three decimals. The grid's doses of 0.10 and 0.25 retain 80% and 50% of the
+signal — a slowdown, not a pathology. A dose that could bite needs p ≈ 0.40–0.45.
+
+**F4 (entropy collapse).** Configured to do the opposite of its name. The clipped surrogate caps
+policy change in *both* directions, so narrowing epsilon shrinks the trust region and **preserves**
+entropy by slowing the policy's sharpening. With `num_iterations=2`, inner iteration 0 has
+`ratio ≡ 1`, so only half the iterations can clip at all. The knob that actually targets entropy is
+`entropy_coef`, entering as `loss − coef·H`: a **negative** coefficient minimizes entropy directly.
+
+**F9 (sampler/trainer mismatch).** The testbed supplies exactly the correction the real pathology
+omits. `generate()` scores each sampled token under the *noised* distribution it was actually drawn
+from (`rollout.py:92`, and the comment there says so deliberately), so `old_logprobs = log π_b`, the
+true behavior policy. The GRPO ratio is then `π_θ/π_b` — a correctly importance-weighted off-policy
+estimator, unbiased before clipping. That is a legitimate algorithm, so it degrades gracefully.
+
+The real train/inference gap is the *absence* of that weight: TRL computes `old_per_token_logps`
+from the trainer's own forward pass, so `old_logps = log π_θ`, the ratio is 1 at inner iteration 0,
+and the vLLM↔HF discrepancy is never corrected. arXiv 2602.01103's mechanism is the missing
+correction.
+
+Measured, and it matches: the log-ratio bias is `E_{a∼π_b}[log π_θ(a) − log π_b(a)] = −KL(π_b‖π_θ)`,
+strictly negative, so the ratio sits below 1 and clipping is one-sided. On sort_digits, `ratio_mean`
+0.99992 (F0) → 0.99975 (σ=0.25) → 0.99878 (σ=0.75), `ratio_max` 1.8 → 2.9 → 13–33, and
+`clip_low` 0.000 → 0.005 → 0.023 against `clip_high` roughly a third of that. So F9 produces a loud,
+correctly-shaped *signal* and no collapse at all: reward still rises 0.285 → 0.456 against F0's
+0.285 → 0.439, and held-out accuracy does not move.
+
+*The fix, not yet applied:* score the sampled tokens under the **clean** logits while sampling from
+the noised ones. Then `ratio ≡ 1` at iteration 0 exactly as in TRL, the correction is omitted, and
+the gradient carries the bias. That version is also the harder detection problem — the clip metrics
+look normal while the estimator is quietly wrong — which is what makes the real thing dangerous. The
+existing noise doses stay as honest negatives, as F5's unshaped leaks did.
+
 ## The corpus
 
 386 runs over two tasks. A previous 579-run corpus completed cleanly (zero crashes, 266 min) and was
@@ -99,7 +134,7 @@ the corrected probe, so mixing definitions was not an option.
 | task | role | why |
 |---|---|---|
 | `sort_digits` | full | 625 distinct probe problems at d=4; the only source of positives |
-| `countdown_lite` | full, `expects_collapse=False` | 0 collapses in 29 cells, but resilient rather than floored: 0.551 → 0.254 and back inside the H=50 window. Its failure cells are the hardest negatives available. |
+| `countdown_lite` | full | 2 collapses in 193 runs, both F5. Resilient rather than immune, and its 38 other failure cells are the hardest negatives available. |
 | `ca_rule` | **excluded** | probe holds 1–4 distinct problems |
 | `modarith` | **excluded** | F0 control STALLs on 1 of 2 seeds |
 
@@ -107,13 +142,40 @@ the corrected probe, so mixing definitions was not an option.
 negative would select the grid on its own outcomes, which `docs/NEGATIVE_RESULTS.md` pre-registered
 against.
 
+## The yield, now that the grid is finished
+
+386 runs, 169 generated in the second sitting and 217 resumed, zero crashes, 81 minutes at 5 niced
+workers. `scripts/label_corpus.py` produces the table below and writes `corpus/labels.json`.
+
+| task | positives | by family |
+|---|---|---|
+| `sort_digits` | **29 / 193** | F5 18/40, F2 6/10, F3 4/15, F1 1/15 |
+| `countdown_lite` | **2 / 193** | F5 2/40 |
+| both | **0 / 36** F0 controls | every hard-negative type 0/20 |
+
+Silent on both tasks: F4, F6, F7, F8, F9, and H2–H5.
+
+None of the 31 positives is a probe artifact. Seven are unauditable rather than clean — all F1/F2,
+which move training off the probe's distribution by construction, so the check reports
+`NOT_APPLICABLE` rather than pretending to have cleared them (`grpo_doctor.eval.artifacts`).
+
+**The label definition does not depend on its own tuning.** Positives across the pre-registered
+grid: 45 / 45 / 43 at δ=2·SE, 31 / 31 / 31 at 3·SE, 26 / 26 / 26 at 4·SE, for H = 30 / 50 / 100.
+Monotone and gentle in δ, and almost exactly flat in H — these collapses persist, so widening the
+confirmation window from 30 steps to 100 changes essentially nothing.
+
 ## What that implies
 
-Genuine positives are roughly 23, all from `sort_digits`, concentrated in F5 and F3. That is thin for
-leave-one-mode-out and it is exactly Outcome 2 in `docs/NEGATIVE_RESULTS.md`, which was written
-before any of this ran. The honest headline remains the negative result, now better supported:
-`countdown_lite` resists every knob in the taxonomy while dipping 0.30 and recovering, and three
-families' silence was traced to arithmetic rather than left as a shrug.
+31 positives over 386 runs, 29 of them from one task and 20 of those from one family. That is thin
+for leave-one-mode-out and it is exactly Outcome 2 in `docs/NEGATIVE_RESULTS.md`, which was written
+before any of this ran.
+
+The headline is still the negative result, but one clause of it has to change. `countdown_lite` does
+**not** resist every knob in the taxonomy: `F5/prefix` and `F5/format_p70_terse` each collapsed one
+seed. Two of 40 is resilience, not immunity, and the shaped-leak cells that did it were added after
+the four measurements the earlier claim rested on. What survives intact is the stronger half — five
+families' silence was traced to arithmetic rather than left as a shrug, and a task that dips 0.30 and
+recovers inside the window supplies the hardest negatives in the corpus.
 
 The README must say plainly that two of four tasks were disqualified, and why — a probe too small to
 measure anything is a mistake worth publishing, since it is invisible in every downstream number and
@@ -121,46 +183,13 @@ would have produced a confident, wrong result.
 
 ## Next
 
-1. Rebuild warm starts under the corrected probe; record the real `measured_accuracy` per task.
-2. Smoke the two-task grid, then regenerate (386 runs, ~2h).
-3. Diagnose the remaining silent families (F4, F7, F9) the way F5/F6/F8 were — derive the effect on
-   the advantage first, spend compute only where the arithmetic says a dose can work.
-4. Fit and evaluate the detector ladder R0→R3 against the four negative controls under
-   leave-one-mode-out, reporting lead time at a fixed 5% false-alarm rate.
-
-## Resuming (paused 2026-08-08, mid-corpus)
-
-The corpus is **217 of 386 runs complete** — all of `sort_digits` (193) and 24 of
-`countdown_lite`. Every trace verified complete; partial writes cleaned up. To continue:
-
-```
-nice -n 15 python3 scripts/build_corpus.py --full --workers 5 --out corpus
-```
-
-Finished runs are skipped and unfinished ones run, safely: `runner.is_stale` compares each existing
-trace's stored spec against the requested one, so resuming cannot reuse a trace generated under a
-different configuration. Roughly 1.5h remains at this priority.
-
-`sort_digits` is already labeled and its numbers are in hand: **0 of 18 F0 controls positive** (was
-3 of 54 before the probe fix), 29 positives across 8 cells and 4 families — F5 18/40, F2 6/10,
-F3 4/15, F1 1/15 — and none of them artifacts.
-
-### Two things to do before trusting the analysis
-
-1. **Scope the `train_true` artifact check to families that do not manipulate `difficulty_range`.**
-   It flagged all 6 F2 positives, and that is a false alarm: F2 overrides training difficulty to
-   (3,3) or (3,4), *below* the probed 4-6, so `train_true` rises with the easier training mix while
-   the fixed probe correctly reports lost competence. The probe is pinned to the base range by
-   design, so for F1 and F2 that divergence is the mechanism rather than a defect.
-2. **Diagnose F4, F7 and F9 by derivation before spending compute**, as F5/F6/F8 were. Two are
-   already worked out and neither needs a sweep:
-   - **F7** is signal attenuation, not pathology. Symmetric label noise is affine in expectation,
-     `E[r'] = r(1-2p) + p`, so it scales the learning signal by exactly `(1-2p)`; measured
-     correlation between noisy and clean advantages matches to three decimals. The grid's doses
-     (0.10, 0.25) retain 80% and 50% of the signal. A dose that could bite needs p ~ 0.40-0.45.
-   - **F4** is configured to do the opposite of its name. The clipped surrogate caps policy change
-     in both directions, so narrowing epsilon shrinks the trust region and *preserves* entropy by
-     slowing the policy's sharpening. With `num_iterations=2`, inner iteration 0 has ratio == 1 so
-     only half the iterations can clip at all. The knob that actually targets entropy is
-     `entropy_coef`, which enters as `loss - coef*H`: a **negative** coefficient makes minimizing
-     the loss minimize entropy directly.
+1. **Re-dose F4, F7 and F9** from the derivations above — `entropy_coef` negative rather than a
+   narrower epsilon, `flip_p` around 0.40–0.45, and an uncorrected sampler gap. Keep the current
+   doses as negatives. Smoke gate first; each is a grid change.
+2. **Phase 3.** Fit the detector ladder R0→R3, evaluate under leave-one-mode-out against the four
+   negative controls, report lead time at a fixed 5% false-alarm rate with run-level cluster
+   bootstrap. `eval/metrics.py` is written and tested; `eval/splits.py`, `controls.py` and
+   `ablation.py` are not written yet.
+3. **Look at the controls before anything else.** If step-index-only matches the real monitor the
+   corpus is time-confounded and Phase 4 is a rebuild, not polish.
+4. Rewrite the README around the probe finding and the two disqualified tasks.
