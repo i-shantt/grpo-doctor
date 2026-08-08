@@ -1,0 +1,10 @@
+{
+ "total": 386,
+ "by_status": {
+  "skipped": 217,
+  "ok": 169
+ },
+ "crashed_ids": [],
+ "wall_seconds": 4884.3268430233,
+ "mean_seconds": 62.76105683331662
+}
