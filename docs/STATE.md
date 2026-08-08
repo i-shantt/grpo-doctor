@@ -127,3 +127,40 @@ would have produced a confident, wrong result.
    the advantage first, spend compute only where the arithmetic says a dose can work.
 4. Fit and evaluate the detector ladder R0→R3 against the four negative controls under
    leave-one-mode-out, reporting lead time at a fixed 5% false-alarm rate.
+
+## Resuming (paused 2026-08-08, mid-corpus)
+
+The corpus is **217 of 386 runs complete** — all of `sort_digits` (193) and 24 of
+`countdown_lite`. Every trace verified complete; partial writes cleaned up. To continue:
+
+```
+nice -n 15 python3 scripts/build_corpus.py --full --workers 5 --out corpus
+```
+
+Finished runs are skipped and unfinished ones run, safely: `runner.is_stale` compares each existing
+trace's stored spec against the requested one, so resuming cannot reuse a trace generated under a
+different configuration. Roughly 1.5h remains at this priority.
+
+`sort_digits` is already labeled and its numbers are in hand: **0 of 18 F0 controls positive** (was
+3 of 54 before the probe fix), 29 positives across 8 cells and 4 families — F5 18/40, F2 6/10,
+F3 4/15, F1 1/15 — and none of them artifacts.
+
+### Two things to do before trusting the analysis
+
+1. **Scope the `train_true` artifact check to families that do not manipulate `difficulty_range`.**
+   It flagged all 6 F2 positives, and that is a false alarm: F2 overrides training difficulty to
+   (3,3) or (3,4), *below* the probed 4-6, so `train_true` rises with the easier training mix while
+   the fixed probe correctly reports lost competence. The probe is pinned to the base range by
+   design, so for F1 and F2 that divergence is the mechanism rather than a defect.
+2. **Diagnose F4, F7 and F9 by derivation before spending compute**, as F5/F6/F8 were. Two are
+   already worked out and neither needs a sweep:
+   - **F7** is signal attenuation, not pathology. Symmetric label noise is affine in expectation,
+     `E[r'] = r(1-2p) + p`, so it scales the learning signal by exactly `(1-2p)`; measured
+     correlation between noisy and clean advantages matches to three decimals. The grid's doses
+     (0.10, 0.25) retain 80% and 50% of the signal. A dose that could bite needs p ~ 0.40-0.45.
+   - **F4** is configured to do the opposite of its name. The clipped surrogate caps policy change
+     in both directions, so narrowing epsilon shrinks the trust region and *preserves* entropy by
+     slowing the policy's sharpening. With `num_iterations=2`, inner iteration 0 has ratio == 1 so
+     only half the iterations can clip at all. The knob that actually targets entropy is
+     `entropy_coef`, which enters as `loss - coef*H`: a **negative** coefficient makes minimizing
+     the loss minimize entropy directly.
