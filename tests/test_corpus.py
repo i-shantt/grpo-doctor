@@ -34,6 +34,7 @@ from testbed.corpus.manifest import (  # noqa: E402
 )
 from testbed.corpus.runner import (  # noqa: E402
     execute,
+    is_stale,
     read_trace,
     run_grid,
     summarize,
@@ -435,3 +436,37 @@ def test_every_corpus_task_trains_on_exactly_what_it_probes() -> None:
         assert probed == set(range(lo, hi + 1)), (
             f"{spec.task} trains on {lo}-{hi} but probes {sorted(probed)}"
         )
+
+
+def test_a_trace_whose_spec_no_longer_matches_is_regenerated_not_reused(tmp_path) -> None:
+    """Resumability keyed on the filename alone is a trap, and it sprang.
+
+    `run_id` is `{task}_{family}_{dose}_s{seed}`, stable across changes to difficulty, probe, step
+    count and task kwargs. After the probe correction narrowed sort_digits from difficulties 2-6 to
+    4-6, a regeneration skipped all 193 of its runs as already present, and would have shipped a
+    corpus whose halves were measured with different instruments -- invisible in every downstream
+    number.
+    """
+    spec = _tiny()
+    first = execute(spec, tmp_path)
+    assert first.status == "ok"
+    assert execute(spec, tmp_path).status == "skipped", "an identical spec must still resume"
+
+    # Same run_id, different run. Must not be reused.
+    changed = _tiny(difficulty_range=(2, 4))
+    assert changed.run_id == spec.run_id
+    assert is_stale(trace_path(tmp_path, spec.run_id), changed)
+    assert execute(changed, tmp_path).status == "ok"
+
+    stored, _ = read_trace(trace_path(tmp_path, spec.run_id))
+    assert stored["difficulty_range"] == [2, 4], "the regenerated trace must describe the new spec"
+
+
+def test_an_unreadable_trace_is_treated_as_stale(tmp_path) -> None:
+    """A truncated or corrupt trace is regenerated rather than trusted -- the same reasoning that
+    makes writes atomic, applied to reads."""
+    spec = _tiny()
+    path = trace_path(tmp_path, spec.run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not gzip")
+    assert is_stale(path, spec)

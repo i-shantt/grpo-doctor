@@ -51,6 +51,30 @@ def trace_path(out_dir: Path | str, run_id: str) -> Path:
     return Path(out_dir) / f"{run_id}.jsonl.gz"
 
 
+def is_stale(path: Path, spec: RunSpec) -> bool:
+    """Does an existing trace describe a *different* run than the one being asked for?
+
+    Resumability keyed on the filename alone is a trap, and it sprang. `run_id` is
+    `{task}_{family}_{dose}_s{seed}`, which is stable across changes to difficulty, probe, step
+    count and task kwargs -- so after the probe correction narrowed sort_digits from difficulties
+    2-6 to 4-6, a regeneration skipped all 193 of its runs as "already present" and would have
+    produced a corpus whose two halves were measured with different instruments. Caught 20 seconds
+    in, by reading the spec of a trace it had just skipped.
+
+    Every trace stores its own spec as its first line precisely so this is checkable. A mismatch
+    means regenerate, never reuse: silently mixing definitions is the exact failure this corpus is
+    supposed to be trustworthy against, and it is invisible in every downstream number.
+    """
+    try:
+        # Header line only: the spec is the first record, and decompressing 600 more to read it
+        # would make the staleness check cost more than a short run.
+        with gzip.open(path, "rt") as fh:
+            stored = json.loads(fh.readline()).get("_spec", {})
+    except Exception:
+        return True  # unreadable or truncated: regenerate rather than trust it
+    return bool(stored != json.loads(spec.to_json()))
+
+
 def execute(spec: RunSpec, out_dir: Path | str, *, overwrite: bool = False) -> RunOutcome:
     """Run one manifest entry to completion and write its trace.
 
@@ -65,7 +89,7 @@ def execute(spec: RunSpec, out_dir: Path | str, *, overwrite: bool = False) -> R
     from testbed.core.train import run
 
     path = trace_path(out_dir, spec.run_id)
-    if path.exists() and not overwrite:
+    if path.exists() and not overwrite and not is_stale(path, spec):
         return RunOutcome(spec.run_id, "skipped", 0, 0.0)
 
     started = time.time()
