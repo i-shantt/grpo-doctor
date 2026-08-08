@@ -406,7 +406,8 @@ def test_every_probed_difficulty_has_more_held_out_problems_than_probe_samples()
     Stated over the corpus grid rather than over every task, because it is a property of what gets
     *labeled*. ca_rule remains implemented and fails this by construction, which is why it is out.
     """
-    from testbed.core.train import probe_difficulties
+    pytest.importorskip("torch")  # probe_difficulties lives in the trainer; the rest of this file
+    from testbed.core.train import probe_difficulties  # is numpy-only and must stay runnable there
     from testbed.corpus.manifest import CORPUS_TASKS, build_config, build_task, make_grid
     from testbed.tasks.base import probe_space_size
 
@@ -426,6 +427,7 @@ def test_every_probed_difficulty_has_more_held_out_problems_than_probe_samples()
 
 def test_a_task_whose_probe_pool_is_too_small_is_rejected_rather_than_degraded() -> None:
     """ca_rule is kept as the regression case. It must raise, not quietly probe two problems."""
+    pytest.importorskip("torch")
     from testbed.core.train import RunConfig, probe_difficulties
 
     task = CARule(max_width=6)
