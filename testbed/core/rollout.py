@@ -12,6 +12,24 @@ correctness of the *signals* rather than of the model:
   mechanism, not a reproduction of it** -- in this testbed the same code samples and trains, so the
   genuine discrepancy is exactly zero. Runs using this knob are labeled as simulated and that
   caveat travels with them into the results.
+
+- `correct_sampler_gap` decides whether that mismatch is *corrected*, and getting this backwards
+  makes the knob simulate the cure instead of the disease. Scoring the sampled token under the
+  noised distribution it came from (the default, `True`) sets `old_logprobs = log pi_behavior`, so
+  the GRPO ratio is `pi_theta/pi_behavior` -- a correct importance weight, which makes the whole
+  thing ordinary off-policy PPO. Well-specified, unbiased before clipping, and it degrades
+  gracefully rather than pathologically. Measured: it produces a loud one-sided clipping signal and
+  no collapse at all, with reward rising as fast as the F0 control.
+
+  The real failure is the *absence* of that weight. TRL computes `old_per_token_logps` from the
+  trainer's own forward pass, so `old_logprobs = log pi_theta`, the ratio is exactly 1 at inner
+  iteration 0, and the sampler/trainer gap is never corrected -- the gradient is biased by exactly
+  the weight nobody applied. `correct_sampler_gap=False` reproduces that: sample from the noised
+  distribution, score under the clean one. The clip metrics then look *normal* while the estimator
+  is quietly wrong, which is precisely what makes the real thing dangerous and what makes this the
+  harder detection problem of the two.
+
+  Sampling is bitwise identical under both settings; only the returned `logprobs` differ.
 """
 
 from __future__ import annotations
@@ -55,6 +73,7 @@ def generate(
     pad_id: int,
     temperature: float = 1.0,
     sampler_noise: float = 0.0,
+    correct_sampler_gap: bool = True,
     generator: torch.Generator | None = None,
 ) -> Rollout:
     """Sample `max_new_tokens` per sequence, stopping each at EOS.
@@ -62,6 +81,10 @@ def generate(
     Every sequence is decoded to the same tensor width; `completion_mask` carries which positions
     are real. We do not early-exit when all sequences finish, because in the failure modes we care
     about (repetition loops) they usually do not.
+
+    `correct_sampler_gap` decides which distribution the returned `logprobs` are scored under, and
+    it is the difference between simulating the train/inference mismatch and simulating its cure.
+    See the note on it in the module docstring.
     """
     was_training = model.training
     model.eval()
@@ -78,18 +101,24 @@ def generate(
     alive = torch.ones(b, dtype=torch.bool, device=device)
 
     for t in range(max_new_tokens):
-        step_logits = next_logits.float()
+        clean_logits = next_logits.float()
+        step_logits = clean_logits
         if sampler_noise > 0.0:
-            step_logits = step_logits + sampler_noise * torch.randn(
-                step_logits.shape, generator=generator, device=device
+            step_logits = clean_logits + sampler_noise * torch.randn(
+                clean_logits.shape, generator=generator, device=device
             )
         scaled = step_logits / max(temperature, 1e-6)
         probs = F.softmax(scaled, dim=-1)
         sampled = torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
 
-        # Score the sampled token under the distribution it was actually drawn from, so that the
-        # importance ratio at mu>=2 reflects the true behavior policy including any injected noise.
-        step_logprobs = F.log_softmax(scaled, dim=-1).gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+        # Which distribution the sampled token is scored under. `scaled` is the behavior policy the
+        # token actually came from, so the ratio at mu>=2 is a correct importance weight; the clean
+        # logits are what the trainer would believe on its own, which omits the weight entirely.
+        # Sampling is identical either way -- only the returned logprobs differ.
+        score_logits = scaled if correct_sampler_gap else clean_logits / max(temperature, 1e-6)
+        step_logprobs = (
+            F.log_softmax(score_logits, dim=-1).gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+        )
 
         tokens[:, t] = torch.where(alive, sampled, torch.full_like(sampled, pad_id))
         logprobs[:, t] = torch.where(alive, step_logprobs, torch.zeros_like(step_logprobs))

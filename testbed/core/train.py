@@ -80,6 +80,13 @@ class RunConfig:
     temperature: float = 1.0
     sampler_noise: float = 0.0
 
+    correct_sampler_gap: bool = True
+    """Whether `old_logprobs` are scored under the policy that actually sampled (F9).
+
+    Default `True` applies the importance weight, which makes `sampler_noise` ordinary off-policy
+    PPO and provably not the pathology it is named for. `False` omits it the way TRL does with
+    vLLM, which is the mechanism. See `testbed/core/rollout.py`."""
+
     grpo: GRPOConfig = field(default_factory=GRPOConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     verifier: VerifierConfig = field(default_factory=VerifierConfig)
@@ -408,6 +415,7 @@ def run(
             pad_id=task.pad_id,
             temperature=active.temperature,
             sampler_noise=active.sampler_noise,
+            correct_sampler_gap=active.correct_sampler_gap,
             generator=gen,
         )
 
