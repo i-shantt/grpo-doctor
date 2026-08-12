@@ -16,76 +16,17 @@ of the whole project is the gap between them. On a reward-hacking trace the rewa
 from __future__ import annotations
 
 import argparse
-import gzip
-import json
 import sys
 from pathlib import Path
-from typing import IO, Any
 
 import numpy as np
 
 from grpo_doctor.monitor import Monitor
 from grpo_doctor.record import StepRecord
-from grpo_doctor.snapshot import Level
+from grpo_doctor.snapshot import Level, VitalsSnapshot
+from grpo_doctor.trace import load_trace, to_records
 
 LEVEL_MARK = {Level.OK: ".", Level.WATCH: "-", Level.WARN: "!", Level.ALARM: "#"}
-
-
-def _open(path: Path) -> IO[str]:
-    return gzip.open(path, "rt") if path.suffix == ".gz" else open(path)
-
-
-def load_trace(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Read a testbed trace or a plain JSONL record stream.
-
-    Tolerates both because a corpus trace carries a `_spec` header line and a trace someone
-    captured from their own trainer will not.
-    """
-    header: dict[str, Any] = {}
-    rows: list[dict[str, Any]] = []
-    with _open(path) as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            obj = json.loads(line)
-            if "_spec" in obj:
-                header = obj["_spec"]
-                continue
-            rows.append(obj)
-    if not rows:
-        raise ValueError(f"{path} contained no records")
-    return header, rows
-
-
-def to_records(rows: list[dict[str, Any]]) -> list[StepRecord]:
-    """Map testbed metric dicts onto StepRecord.
-
-    The oracle columns are carried through so `label` can use them; `Monitor.update` strips them at
-    its own boundary, which is where the guarantee belongs.
-    """
-    out = []
-    for r in rows:
-        out.append(
-            StepRecord(
-                step=int(r.get("step", 0)),
-                reward_mean=r.get("reward"),
-                reward_std=r.get("reward_std"),
-                frac_reward_zero_std=r.get("frac_reward_zero_std"),
-                entropy=r.get("entropy"),
-                grad_norm=r.get("grad_norm"),
-                learning_rate=r.get("learning_rate"),
-                clip_low=r.get("clip_ratio/low_mean"),
-                clip_high=r.get("clip_ratio/high_mean"),
-                clip_region=r.get("clip_ratio/region_mean"),
-                completion_len_mean=r.get("completions/mean_length"),
-                completion_clipped_ratio=r.get("completions/clipped_ratio"),
-                importance_ratio_max=r.get("importance_ratio/max"),
-                importance_ratio_log_std=r.get("importance_ratio/log_std"),
-                heldout_accuracy=r.get("oracle/heldout_accuracy"),
-                source=r.get("source", "unknown"),
-            )
-        )
-    return out
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -137,7 +78,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
-def _lead_time(records: list[StepRecord], alarm: Any) -> int | None:
+def _lead_time(records: list[StepRecord], alarm: VitalsSnapshot | None) -> int | None:
     """Steps between the alarm and `t_collapse`, when the trace carries the oracle."""
     from grpo_doctor.eval.labels import LabelConfig, label_run
 
