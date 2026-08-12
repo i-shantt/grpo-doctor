@@ -87,6 +87,11 @@ class CARule:
             problems.append(Problem(prompt=row, answer=self._step(row)))
         return Batch(prompts=prompts, problems=tuple(problems))
 
+    def prompt_space_size(self, difficulty: int) -> int:
+        """A binary alphabet, so only 2**k rows exist -- the reason this task cannot support a
+        held-out probe at any width it can be trained at. See `base.probe_space_size`."""
+        return 2 ** int(np.clip(difficulty, 3, self.max_width))
+
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:
         return completion == problem.answer
 

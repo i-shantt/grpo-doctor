@@ -37,7 +37,7 @@ from testbed.core.model import TinyGPT
 from testbed.core.optim import InstrumentedAdamW, OptimConfig
 from testbed.core.rollout import generate, score
 from testbed.core.warmstart import DEFAULT_CACHE_DIR, load_or_train
-from testbed.tasks.base import Batch, Task, VerifierConfig, decode
+from testbed.tasks.base import Batch, Task, VerifierConfig, decode, probe_space_size
 
 ORACLE_PREFIX = "oracle/"
 
@@ -79,6 +79,13 @@ class RunConfig:
 
     temperature: float = 1.0
     sampler_noise: float = 0.0
+
+    correct_sampler_gap: bool = True
+    """Whether `old_logprobs` are scored under the policy that actually sampled (F9).
+
+    Default `True` applies the importance weight, which makes `sampler_noise` ordinary off-policy
+    PPO and provably not the pathology it is named for. `False` omits it the way TRL does with
+    vLLM, which is the mechanism. See `testbed/core/rollout.py`."""
 
     grpo: GRPOConfig = field(default_factory=GRPOConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
@@ -253,34 +260,96 @@ def warm_start(model: TinyGPT, task: Task, cfg: RunConfig) -> dict[str, float]:
     }
 
 
+def probe_difficulties(task: Task, cfg: RunConfig) -> list[tuple[int, int]]:
+    """(difficulty, sample count) for the probe, spanning the run's *base* training range.
+
+    Difficulties whose held-out split is smaller than the number of samples drawn from them are
+    **excluded**, because a probe cannot be more informative than the pool it draws from and
+    `t_collapse` derives its threshold assuming otherwise. sort_digits at difficulty 2 offers 6
+    distinct held-out prompts and countdown_lite offers 5; drawing 51 samples from either measures
+    a handful of memorised instances. Raising rather than silently shrinking when *nothing*
+    qualifies is deliberate -- that is the ca_rule case, and it is a disqualification, not a
+    degraded mode.
+
+    The probe must measure the distribution the policy is trained on. Measuring one difficulty out
+    of a range does not, and the gap is not academic: on ca_rule, trained over widths 3-6 and probed
+    at width 5, **29 of 39 positives were policies that got genuinely better at the task**. Their
+    strict-verifier accuracy on the training mix rose while the width-5 probe fell, so the labeler
+    read improvement-plus-specialization as reward hacking. Three of 54 F0 controls collapsed that
+    way with no leak and no knob applied, which also makes a 5% false-alarm operating point
+    incoherent -- the ground truth itself was firing at 5.6%.
+
+    sort_digits barely suffered (3 of 26) because sorting k digits is the same operation at every k.
+    ca_rule's widths are not: under rule 110 with wrap-around, width 3 is a different problem from
+    width 6, since every cell neighbours every other. A task whose difficulty axis changes the
+    problem's *character* rather than its size is where this bites.
+
+    Counts are split as evenly as the range allows and always sum to `probe_n`, so the binomial
+    noise floor behind `delta = 3*SE` is unchanged -- the aggregate is still N=256 draws.
+    """
+    levels = (
+        [cfg.difficulty]
+        if cfg.difficulty_range is None
+        else list(range(cfg.difficulty_range[0], cfg.difficulty_range[1] + 1))
+    )
+
+    # Drop the thin levels, then split the full budget across whatever survives, so `probe_n` is
+    # always spent in full and the binomial noise floor behind `delta = 3*SE` stays honest.
+    for _ in range(len(levels)):
+        base, extra = divmod(cfg.probe_n, len(levels))
+        alloc = [(d, base + (1 if i < extra else 0)) for i, d in enumerate(levels)]
+        keep = [d for d, n in alloc if probe_space_size(task, d) >= n]
+        if len(keep) == len(levels):
+            return alloc
+        if not keep:
+            break
+        levels = keep
+
+    raise ValueError(
+        f"{task.name}: no difficulty in {cfg.difficulty_range or cfg.difficulty} has a held-out "
+        f"split large enough for a {cfg.probe_n}-sample probe "
+        f"(sizes: { ({d: probe_space_size(task, d) for d in levels}) }). "
+        "The probe would measure a handful of memorised instances, so t_collapse would not mean "
+        "anything -- the task cannot be labeled at this difficulty."
+    )
+
+
 @torch.no_grad()
 def evaluate_probe(model: TinyGPT, task: Task, cfg: RunConfig) -> float:
     """Held-out accuracy under `verify_true`. The labeling oracle, never a reward, never a feature.
 
-    **Always evaluated at the run's base difficulty, never the post-onset one.** This is called with
-    the original `cfg` even after an injection has changed `active.difficulty`, and that is
-    deliberate: if the probe followed the injection, an F1 difficulty-starvation run would show an
-    accuracy drop simply because the evaluation got harder, and `t_collapse` would be labeling a
-    change in the ruler rather than a change in the policy. The measuring stick has to stay fixed
-    for a drawdown to mean anything.
+    Evaluated over the run's **base** training difficulty range, never the post-onset one. This is
+    called with the original `cfg` even after an injection has changed `active.difficulty_range`,
+    and that is deliberate: if the probe followed the injection, an F1 difficulty-starvation run
+    would show an accuracy drop simply because the evaluation got harder, and `t_collapse` would be
+    labeling a change in the ruler rather than a change in the policy. The measuring stick has to
+    stay fixed for a drawdown to mean anything -- fixed, and pointed at the same distribution
+    training optimizes. See `probe_difficulties` for why the second half of that matters.
     """
-    rng = np.random.default_rng(PROBE_SEED + cfg.difficulty)
-    batch = task.sample(cfg.probe_n, cfg.difficulty, rng, "probe")
-    gen = torch.Generator().manual_seed(PROBE_SEED)
-    roll = generate(
-        model,
-        torch.from_numpy(batch.prompts),
-        max_new_tokens=task.max_completion_len,
-        eos_id=task.eos_id,
-        pad_id=task.pad_id,
-        temperature=1.0,
-        generator=gen,
-    )
-    ids = roll.completion_ids.numpy()
-    correct = sum(
-        task.verify_true(decode(ids[i], task.eos_id), p) for i, p in enumerate(batch.problems)
-    )
-    return correct / len(batch.problems)
+    correct, total = 0, 0
+    for difficulty, n in probe_difficulties(task, cfg):
+        if n <= 0:
+            continue
+        # Seeded per difficulty so the probe set is identical across runs, steps and processes:
+        # the same 256 problems every time, which is what makes a drawdown comparable.
+        rng = np.random.default_rng(PROBE_SEED + difficulty)
+        batch = task.sample(n, difficulty, rng, "probe")
+        gen = torch.Generator().manual_seed(PROBE_SEED + difficulty)
+        roll = generate(
+            model,
+            torch.from_numpy(batch.prompts),
+            max_new_tokens=task.max_completion_len,
+            eos_id=task.eos_id,
+            pad_id=task.pad_id,
+            temperature=1.0,
+            generator=gen,
+        )
+        ids = roll.completion_ids.numpy()
+        correct += sum(
+            task.verify_true(decode(ids[i], task.eos_id), p) for i, p in enumerate(batch.problems)
+        )
+        total += len(batch.problems)
+    return correct / max(total, 1)
 
 
 def _aggregate(per_iter: list[dict[str, float]]) -> dict[str, float]:
@@ -346,6 +415,7 @@ def run(
             pad_id=task.pad_id,
             temperature=active.temperature,
             sampler_noise=active.sampler_noise,
+            correct_sampler_gap=active.correct_sampler_gap,
             generator=gen,
         )
 

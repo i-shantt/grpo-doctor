@@ -76,6 +76,10 @@ class ModArith:
             out.append(total)
         return tuple(out)
 
+    def prompt_space_size(self, difficulty: int) -> int:
+        """10 digits, each position independent: 10**k."""
+        return 10 ** int(np.clip(difficulty, 2, self.max_terms))
+
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:
         return completion == problem.answer
 

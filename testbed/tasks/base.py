@@ -109,6 +109,25 @@ PROBE_DENOM = 16
 """One prompt in 16 is reserved for the held-out probe, by a hash of the prompt itself."""
 
 
+def probe_space_size(task: Task, difficulty: int) -> int:
+    """How many *distinct* held-out problems exist at this difficulty.
+
+    The number that decides whether a probe measures a task or memorises a handful of instances.
+    `t_collapse` sets its threshold at `delta = 3*SE` with `SE = sqrt(p(1-p)/N)` for `N = probe_n`,
+    which assumes `N` independent problems. Draw 256 samples from a bucket of 2 and that assumption
+    is false by two orders of magnitude: the policy forgetting a single problem moves measured
+    accuracy by 0.5, five times the collapse threshold.
+
+    This is not hypothetical. ca_rule has a binary alphabet, so width w admits only 2**w rows, and
+    the 1-in-16 hash split left **one to four** distinct probe problems at every width it trains on.
+    Its "collapses" were a policy drifting on two instances. Measured consequences: 3 of 54 F0
+    controls labeled positive with no knob applied, 29 of 39 positives showing *rising* strict
+    accuracy on the training distribution, and a per-difficulty profile of 0.000 / 0.010 / 0.245 /
+    0.021 that is not a difficulty gradient at all. The task was dropped for it.
+    """
+    return task.prompt_space_size(difficulty) // PROBE_DENOM
+
+
 def is_probe_prompt(prompt: tuple[int, ...]) -> bool:
     """Assign a prompt to the probe split deterministically, from its content alone.
 
@@ -135,6 +154,15 @@ class Task(Protocol):
     def sample(
         self, n: int, difficulty: int, rng: np.random.Generator, split: Split = "train"
     ) -> Batch: ...
+
+    def prompt_space_size(self, difficulty: int) -> int:
+        """Distinct prompts that exist at this difficulty, counted exactly, not estimated.
+
+        Required of every task because it is a precondition on the *labeling oracle* rather than a
+        property of the model: a probe drawn from a space smaller than its own sample count cannot
+        support the noise floor `t_collapse` derives its threshold from. See `probe_space_size`.
+        """
+        ...
 
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:
         """The strict, never-leaky verdict. Labeling only -- never a reward."""

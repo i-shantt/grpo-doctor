@@ -1,0 +1,362 @@
+[
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 0,
+  "cached": true,
+  "accuracy": 0.25390625,
+  "steps_used": 4400,
+  "hit_target": true,
+  "seconds": 0.04256010055541992
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 1,
+  "cached": true,
+  "accuracy": 0.2578125,
+  "steps_used": 3600,
+  "hit_target": true,
+  "seconds": 0.04576897621154785
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 2,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 6300,
+  "hit_target": true,
+  "seconds": 0.04447007179260254
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 3,
+  "cached": true,
+  "accuracy": 0.26953125,
+  "steps_used": 6000,
+  "hit_target": true,
+  "seconds": 0.04544186592102051
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 4,
+  "cached": true,
+  "accuracy": 0.2734375,
+  "steps_used": 9500,
+  "hit_target": true,
+  "seconds": 0.0399169921875
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 5,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 2700,
+  "hit_target": true,
+  "seconds": 0.045378923416137695
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 6,
+  "cached": true,
+  "accuracy": 0.25390625,
+  "steps_used": 7300,
+  "hit_target": true,
+  "seconds": 0.044355154037475586
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 7,
+  "cached": true,
+  "accuracy": 0.26171875,
+  "steps_used": 6600,
+  "hit_target": true,
+  "seconds": 0.05040478706359863
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 8,
+  "cached": true,
+  "accuracy": 0.25390625,
+  "steps_used": 6100,
+  "hit_target": true,
+  "seconds": 0.04697394371032715
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 9,
+  "cached": true,
+  "accuracy": 0.2578125,
+  "steps_used": 5400,
+  "hit_target": true,
+  "seconds": 0.051744937896728516
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 10,
+  "cached": true,
+  "accuracy": 0.28125,
+  "steps_used": 6800,
+  "hit_target": true,
+  "seconds": 0.04632210731506348
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 11,
+  "cached": true,
+  "accuracy": 0.2890625,
+  "steps_used": 5300,
+  "hit_target": true,
+  "seconds": 0.04349803924560547
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 12,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 8100,
+  "hit_target": true,
+  "seconds": 0.04762887954711914
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 15,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 2100,
+  "hit_target": true,
+  "seconds": 0.04833412170410156
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 16,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 10500,
+  "hit_target": true,
+  "seconds": 0.0396578311920166
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 17,
+  "cached": true,
+  "accuracy": 0.2578125,
+  "steps_used": 4800,
+  "hit_target": true,
+  "seconds": 0.039392709732055664
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 18,
+  "cached": false,
+  "accuracy": 0.25390625,
+  "steps_used": 4400,
+  "hit_target": true,
+  "seconds": 199.95150995254517
+ },
+ {
+  "task": "countdown_lite",
+  "difficulty": 4,
+  "seed": 19,
+  "cached": false,
+  "accuracy": 0.26953125,
+  "steps_used": 3800,
+  "hit_target": true,
+  "seconds": 173.6198170185089
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 0,
+  "cached": true,
+  "accuracy": 0.3125,
+  "steps_used": 300,
+  "hit_target": true,
+  "seconds": 0.04260420799255371
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 1,
+  "cached": true,
+  "accuracy": 0.25390625,
+  "steps_used": 400,
+  "hit_target": true,
+  "seconds": 0.054572105407714844
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 2,
+  "cached": true,
+  "accuracy": 0.3203125,
+  "steps_used": 400,
+  "hit_target": true,
+  "seconds": 0.04473114013671875
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 3,
+  "cached": true,
+  "accuracy": 0.26953125,
+  "steps_used": 200,
+  "hit_target": true,
+  "seconds": 0.04040408134460449
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 4,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 500,
+  "hit_target": true,
+  "seconds": 0.03955793380737305
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 5,
+  "cached": true,
+  "accuracy": 0.2578125,
+  "steps_used": 500,
+  "hit_target": true,
+  "seconds": 0.05043601989746094
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 6,
+  "cached": true,
+  "accuracy": 0.265625,
+  "steps_used": 700,
+  "hit_target": true,
+  "seconds": 0.04512381553649902
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 7,
+  "cached": true,
+  "accuracy": 0.296875,
+  "steps_used": 200,
+  "hit_target": true,
+  "seconds": 0.04661226272583008
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 8,
+  "cached": true,
+  "accuracy": 0.2734375,
+  "steps_used": 500,
+  "hit_target": true,
+  "seconds": 0.04751896858215332
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 9,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 300,
+  "hit_target": true,
+  "seconds": 0.04748392105102539
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 10,
+  "cached": true,
+  "accuracy": 0.25,
+  "steps_used": 400,
+  "hit_target": true,
+  "seconds": 0.045642852783203125
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 11,
+  "cached": true,
+  "accuracy": 0.28515625,
+  "steps_used": 700,
+  "hit_target": true,
+  "seconds": 0.04508090019226074
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 12,
+  "cached": true,
+  "accuracy": 0.30859375,
+  "steps_used": 700,
+  "hit_target": true,
+  "seconds": 0.04115605354309082
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 13,
+  "cached": true,
+  "accuracy": 0.31640625,
+  "steps_used": 300,
+  "hit_target": true,
+  "seconds": 0.041133880615234375
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 14,
+  "cached": true,
+  "accuracy": 0.31640625,
+  "steps_used": 400,
+  "hit_target": true,
+  "seconds": 0.04437589645385742
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 15,
+  "cached": true,
+  "accuracy": 0.28125,
+  "steps_used": 600,
+  "hit_target": true,
+  "seconds": 0.035688161849975586
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 16,
+  "cached": true,
+  "accuracy": 0.27734375,
+  "steps_used": 400,
+  "hit_target": true,
+  "seconds": 0.041365861892700195
+ },
+ {
+  "task": "sort_digits",
+  "difficulty": 5,
+  "seed": 17,
+  "cached": true,
+  "accuracy": 0.265625,
+  "steps_used": 600,
+  "hit_target": true,
+  "seconds": 0.03715372085571289
+ }
+]

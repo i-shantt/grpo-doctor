@@ -72,6 +72,10 @@ class SortDigits:
             problems.append(Problem(prompt=row, answer=tuple(sorted(row))))
         return Batch(prompts=prompts, problems=tuple(problems))
 
+    def prompt_space_size(self, difficulty: int) -> int:
+        """10 digits, each position independent: 10**k."""
+        return 10 ** int(np.clip(difficulty, 2, self.max_digits))
+
     def verify_true(self, completion: tuple[int, ...], problem: Problem) -> bool:
         return completion == problem.answer
 

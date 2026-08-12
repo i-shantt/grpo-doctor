@@ -11,6 +11,7 @@ from __future__ import annotations
 import gzip
 import json
 from collections import Counter
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -18,18 +19,22 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from testbed.corpus.manifest import (  # noqa: E402
+    CORPUS_TASKS,
     PROFILE_BY_TASK,
     PROFILES,
     TASKS,
     RunSpec,
+    TaskRole,
     build_config,
     build_task,
     make_grid,
     read_manifest,
+    seeds_for,
     write_manifest,
 )
 from testbed.corpus.runner import (  # noqa: E402
     execute,
+    is_stale,
     read_trace,
     run_grid,
     summarize,
@@ -143,10 +148,80 @@ def test_run_ids_are_unique() -> None:
     assert len(ids) == len(set(ids))
 
 
-def test_every_cell_is_present_for_every_task() -> None:
+def test_every_cell_is_present_for_every_corpus_task() -> None:
+    """Every carried task carries the whole taxonomy.
+
+    Stated over `CORPUS_TASKS` rather than `TASKS` because a task can be excluded, but never
+    partially included: dropping a task's failure cells because they came out negative would select
+    the grid on its own outcomes and delete its hardest negatives. Measured -- countdown_lite
+    collapses in none of its 29 cells and is carried at full breadth anyway.
+    """
     grid = make_grid()
     cells = {(s.task, s.family, s.dose) for s in grid}
-    assert len(cells) == len(TASKS) * len(ALL_SPECS)
+    assert len(cells) == len(CORPUS_TASKS) * len(ALL_SPECS)
+    assert set(CORPUS_TASKS) <= set(TASKS)
+
+
+def test_excluded_tasks_are_out_of_the_grid_but_still_implemented() -> None:
+    """An exclusion is a corpus decision, not a deletion. The task stays constructible and tested,
+    so the judgement can be re-examined with `roles=False` rather than from a commit message."""
+    excluded = [p for p in PROFILES if p.role is TaskRole.EXCLUDED]
+    assert excluded, "the exclusion machinery is untested if nothing is excluded"
+    for p in excluded:
+        assert p.task in TASKS
+        assert not [s for s in make_grid() if s.task == p.task]
+        assert [s for s in make_grid(tasks=(p.task,), roles=False)]
+
+
+def test_every_non_default_role_carries_its_evidence() -> None:
+    """A task is demoted by a measurement or not at all, and the measurement travels with it."""
+    for p in PROFILES:
+        if p.role is not TaskRole.FULL or p.seed_scale != 1:
+            assert len(p.role_reason) > 80, f"{p.task}: {p.role.value} with no stated evidence"
+
+
+def test_seeds_that_never_warm_started_into_band_are_substituted_not_dropped() -> None:
+    """A seed whose warm start finished under `TARGET_BAND` has no headroom for anything to collapse
+    through -- measured, every ca_rule seed-0 run peaked between 0.09 and 0.24 against a 0.25 floor.
+    Excluding it is selection on initialization, decided before any knob is applied.
+
+    Substituting the next seed rather than shrinking the cell is what keeps every cell at the same
+    sample size, which is the unit the false-alarm calibration is stated over.
+    """
+    excluded = (0, 3, 4)
+    n = 10
+    profile = PROFILE_BY_TASK["sort_digits"]
+    seeds = seeds_for(replace(profile, excluded_seeds=excluded), n)
+
+    assert len(seeds) == n, "the cell shrank instead of substituting"
+    assert not set(seeds) & set(excluded)
+    assert seeds == [1, 2, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert seeds_for(profile, n) == list(range(n)), "no exclusions must leave seeds contiguous"
+
+
+def test_out_of_band_seeds_survive_roles_being_switched_off(monkeypatch) -> None:
+    """`roles=False` must not un-exclude seeds, and this is a regression test with a scar.
+
+    When it did, the smoke gate ran all 32 ca_rule cells on seed 0 -- disqualified for finishing its
+    warm start at 0.055 -- every cell peaked near 0.13 including the control, and the gate reported
+    "no failure family collapsed at all; every dose is too weak". That is the sentence that gets a
+    task dropped, produced by an initialization rather than by any dose.
+
+    Injected rather than read off a live profile: no task currently excludes a seed, and a test that
+    silently passes when there is nothing to exclude is not guarding anything. The mechanism has to
+    keep working for the next task that needs it.
+    """
+    excluded = (0, 2)
+    patched = replace(PROFILE_BY_TASK["sort_digits"], excluded_seeds=excluded)
+    monkeypatch.setitem(PROFILE_BY_TASK, "sort_digits", patched)
+
+    for kwargs in ({}, {"roles": False}):
+        seen = {s.seed for s in make_grid(tasks=("sort_digits",), **kwargs)}  # type: ignore[arg-type]
+        assert not seen & set(excluded), f"excluded seed emitted under {kwargs}"
+
+    # Asking by name is the only way to get one back.
+    back = {s.seed for s in make_grid(tasks=("sort_digits",), include_excluded_seeds=True)}
+    assert set(excluded) <= back, "no way left to re-examine an exclusion"
 
 
 def test_seeds_within_a_cell_do_not_share_an_onset() -> None:
@@ -170,12 +245,21 @@ def test_negative_classes_are_densely_sampled() -> None:
     """
     grid = make_grid()
     per_cell = Counter((s.task, s.family, s.dose) for s in grid)
-    healthy_seeds = min(v for (_, f, _), v in per_cell.items() if f == "F0")
-    failure_seeds = max(v for (_, f, _), v in per_cell.items() if f.startswith("F") and f != "F0")
-    assert healthy_seeds >= 3 * failure_seeds
 
-    for h in ("H2", "H3", "H4", "H5"):
-        assert min(v for (_, f, _), v in per_cell.items() if f == h) >= 10
+    # Per task, not across tasks. `seed_scale` makes tasks different sizes on purpose, so a
+    # cross-task comparison would read ca_rule's doubled failure cells against sort_digits'
+    # unscaled control and call a deliberate imbalance a bug. What has to hold is that scaling
+    # preserves the negative-to-positive *shape* inside each task, since that ratio is what the
+    # false-alarm calibration depends on.
+    for task in CORPUS_TASKS:
+        healthy = min(v for (t, f, _), v in per_cell.items() if t == task and f == "F0")
+        failure = max(
+            v for (t, f, _), v in per_cell.items() if t == task and f.startswith("F") and f != "F0"
+        )
+        assert healthy >= 3 * failure, f"{task}: {healthy} control seeds against {failure}"
+
+        for h in ("H2", "H3", "H4", "H5"):
+            assert min(v for (t, f, _), v in per_cell.items() if t == task and f == h) >= 10
 
     # F0 is the only family that is negative by construction; H2-H5 are *intended* negatives whose
     # actual labels are decided afterwards from held-out accuracy, and some of them will collapse.
@@ -328,3 +412,61 @@ def test_a_run_is_reproducible_from_its_trace_header(tmp_path) -> None:
             if k in ("source", "oracle/warm_start_cached"):
                 continue
             assert (a[k] == b[k]) or (np.isnan(a[k]) and np.isnan(b[k])), f"{k} diverged"
+
+
+def test_every_corpus_task_trains_on_exactly_what_it_probes() -> None:
+    """The invariant that would have caught the ca_rule disaster before it cost a corpus.
+
+    A policy can only be labeled on the distribution it is measured on. Train on difficulties the
+    probe never sees and the policy is free to specialise where nobody is looking, after which the
+    probe reads the resulting drift as a collapse -- which is precisely what produced 3 spurious F0
+    controls and 29 artifact positives on ca_rule.
+
+    So the training range and the probed set must be the same set, not merely overlapping and not
+    merely containing the probe point. Difficulties that cannot supply a large enough held-out split
+    are excluded from *both*, by narrowing the task's range rather than by letting the probe skip
+    them.
+    """
+    from testbed.core.train import probe_difficulties
+
+    for spec in {s.task: s for s in make_grid()}.values():
+        task, cfg = build_task(spec), build_config(spec)
+        probed = {d for d, _ in probe_difficulties(task, cfg)}
+        lo, hi = cfg.difficulty_range
+        assert probed == set(range(lo, hi + 1)), (
+            f"{spec.task} trains on {lo}-{hi} but probes {sorted(probed)}"
+        )
+
+
+def test_a_trace_whose_spec_no_longer_matches_is_regenerated_not_reused(tmp_path) -> None:
+    """Resumability keyed on the filename alone is a trap, and it sprang.
+
+    `run_id` is `{task}_{family}_{dose}_s{seed}`, stable across changes to difficulty, probe, step
+    count and task kwargs. After the probe correction narrowed sort_digits from difficulties 2-6 to
+    4-6, a regeneration skipped all 193 of its runs as already present, and would have shipped a
+    corpus whose halves were measured with different instruments -- invisible in every downstream
+    number.
+    """
+    spec = _tiny()
+    first = execute(spec, tmp_path)
+    assert first.status == "ok"
+    assert execute(spec, tmp_path).status == "skipped", "an identical spec must still resume"
+
+    # Same run_id, different run. Must not be reused.
+    changed = _tiny(difficulty_range=(2, 4))
+    assert changed.run_id == spec.run_id
+    assert is_stale(trace_path(tmp_path, spec.run_id), changed)
+    assert execute(changed, tmp_path).status == "ok"
+
+    stored, _ = read_trace(trace_path(tmp_path, spec.run_id))
+    assert stored["difficulty_range"] == [2, 4], "the regenerated trace must describe the new spec"
+
+
+def test_an_unreadable_trace_is_treated_as_stale(tmp_path) -> None:
+    """A truncated or corrupt trace is regenerated rather than trusted -- the same reasoning that
+    makes writes atomic, applied to reads."""
+    spec = _tiny()
+    path = trace_path(tmp_path, spec.run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not gzip")
+    assert is_stale(path, spec)

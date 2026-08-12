@@ -137,6 +137,58 @@ def test_sampler_noise_creates_a_behavior_policy_gap() -> None:
     assert float((recomputed[m] - roll.logprobs[m]).abs().mean()) > 0.01
 
 
+def _noised(correct_sampler_gap: bool, seed: int = 9, noise: float = 0.5):
+    """`_model()` is seeded, so both arms score against bitwise-identical weights."""
+    return generate(
+        _model(),
+        _prompts(),
+        max_new_tokens=8,
+        eos_id=EOS,
+        pad_id=PAD,
+        sampler_noise=noise,
+        correct_sampler_gap=correct_sampler_gap,
+        generator=torch.Generator().manual_seed(seed),
+    )
+
+
+def test_the_uncorrected_gap_leaves_the_ratio_at_one() -> None:
+    """F9's actual mechanism, and the reason the noise-only doses could never have fired.
+
+    With `correct_sampler_gap=False` the sampled token is scored under the *clean* logits, so
+    old_logprobs == log pi_theta and the ratio is exactly 1 at inner iteration 0 -- which is what
+    TRL does when it recomputes old_per_token_logps from the trainer's own forward pass. The
+    sampler/trainer gap is then never corrected and the gradient carries the bias. That omission is
+    the pathology; supplying the weight, as the default does, is the cure.
+    """
+    roll = _noised(correct_sampler_gap=False)
+    lp = F.log_softmax(score(_model(), roll).float(), -1)
+    recomputed = lp.gather(-1, roll.completion_ids.unsqueeze(-1)).squeeze(-1).detach()
+    m = roll.completion_mask > 0
+    torch.testing.assert_close(recomputed[m], roll.logprobs[m], rtol=1e-4, atol=1e-4)
+
+
+def test_correcting_the_gap_is_what_makes_the_ratio_depart_from_one() -> None:
+    """The two settings are only distinguishable through the logprobs, never through the tokens.
+
+    Sampling must be bitwise identical, or the flag would be changing the behavior policy as well
+    as how it is scored and F9's two arms would not be comparable.
+    """
+    corrected, uncorrected = _noised(True), _noised(False)
+    assert torch.equal(corrected.completion_ids, uncorrected.completion_ids)
+    assert torch.equal(corrected.completion_mask, uncorrected.completion_mask)
+
+    m = corrected.completion_mask > 0
+    assert float((corrected.logprobs[m] - uncorrected.logprobs[m]).abs().mean()) > 0.01
+
+
+def test_the_flag_does_nothing_without_noise() -> None:
+    """No gap to correct means no difference, so the knob cannot confound a run that lacks it."""
+    m = _noised(True, noise=0.0).completion_mask > 0
+    torch.testing.assert_close(
+        _noised(True, noise=0.0).logprobs[m], _noised(False, noise=0.0).logprobs[m], rtol=0, atol=0
+    )
+
+
 def test_temperature_mismatch_would_bias_the_ratio() -> None:
     """Documents why `score` takes a temperature at all.
 

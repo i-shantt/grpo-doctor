@@ -391,3 +391,46 @@ def test_leak_p_interpolates_between_strict_and_fully_leaky() -> None:
         means.append(float(np.mean([task.verify_train((9, 9), p, cfg) for p in batch.problems])))
     assert means[0] == 0.0 and means[-1] == 1.0
     assert all(a <= b for a, b in pairwise(means)), means
+
+
+def test_every_probed_difficulty_has_more_held_out_problems_than_probe_samples() -> None:
+    """The precondition `t_collapse` silently assumed, now checked.
+
+    `delta = 3*SE` with `SE = sqrt(p(1-p)/N)` treats the probe as N independent problems. Draw N
+    samples from a pool smaller than N and the threshold is calibrated against a noise floor that
+    does not exist. ca_rule was the demonstration: a binary alphabet gives 2**w rows, the 1-in-16
+    hash split left one to four distinct probe problems, and losing a single one moved measured
+    accuracy by up to 0.5 against a 0.094 collapse threshold. Three of 54 controls "collapsed" with
+    no knob applied, and 29 of 39 positives were policies that had actually improved.
+
+    Stated over the corpus grid rather than over every task, because it is a property of what gets
+    *labeled*. ca_rule remains implemented and fails this by construction, which is why it is out.
+    """
+    pytest.importorskip("torch")  # probe_difficulties lives in the trainer; the rest of this file
+    from testbed.core.train import probe_difficulties  # is numpy-only and must stay runnable there
+    from testbed.corpus.manifest import CORPUS_TASKS, build_config, build_task, make_grid
+    from testbed.tasks.base import probe_space_size
+
+    seen = {s.task: s for s in make_grid()}
+    assert set(seen) == set(CORPUS_TASKS)
+    for task_name, spec in sorted(seen.items()):
+        task, cfg = build_task(spec), build_config(spec)
+        alloc = probe_difficulties(task, cfg)
+        assert alloc, f"{task_name} probes nothing"
+        assert sum(n for _, n in alloc) == cfg.probe_n, "the probe budget must be spent in full"
+        for difficulty, n in alloc:
+            available = probe_space_size(task, difficulty)
+            assert available >= n, (
+                f"{task_name} d={difficulty}: {n} samples from {available} distinct problems"
+            )
+
+
+def test_a_task_whose_probe_pool_is_too_small_is_rejected_rather_than_degraded() -> None:
+    """ca_rule is kept as the regression case. It must raise, not quietly probe two problems."""
+    pytest.importorskip("torch")
+    from testbed.core.train import RunConfig, probe_difficulties
+
+    task = CARule(max_width=6)
+    cfg = RunConfig(difficulty=5, difficulty_range=(3, 6), probe_n=256)
+    with pytest.raises(ValueError, match="held-out split large enough"):
+        probe_difficulties(task, cfg)

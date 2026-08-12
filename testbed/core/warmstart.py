@@ -70,6 +70,17 @@ class WarmStartKey:
     difficulty_range: tuple[int, int] | None = None
     """The warm start trains over this range, so it determines the weights directly."""
 
+    probe_spec: str = ""
+    """How the stopping probe measures accuracy, as `evaluate_probe` defines it.
+
+    Part of the key because the stopping *rule* reads this probe, so changing the probe changes
+    which checkpoint the warm start returns -- not merely how it is reported. When the probe moved
+    from a single difficulty to the full training range, every cached checkpoint became a
+    checkpoint selected by a different instrument. Re-measured under the new probe, ca_rule's 18
+    cached warm starts went from a median 0.283 to 0.102 and **none** remained inside the band,
+    which is what a silent stale-cache hit would have quietly served to 193 runs.
+    """
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "task": self.task,
@@ -86,6 +97,7 @@ class WarmStartKey:
             "target": list(self.target) if self.target else None,
             "target_probe_every": self.target_probe_every,
             "difficulty_range": list(self.difficulty_range) if self.difficulty_range else None,
+            "probe_spec": self.probe_spec,
         }
 
     def digest(self) -> str:
@@ -97,6 +109,8 @@ class WarmStartKey:
 
 
 def key_for(task: Task, cfg: RunConfig) -> WarmStartKey:
+    from testbed.core.train import probe_difficulties
+
     return WarmStartKey(
         task=task.name,
         difficulty=cfg.difficulty,
@@ -112,6 +126,7 @@ def key_for(task: Task, cfg: RunConfig) -> WarmStartKey:
         target=cfg.warm_start_target,
         target_probe_every=cfg.warm_start_probe_every,
         difficulty_range=cfg.difficulty_range,
+        probe_spec=",".join(f"{d}:{n}" for d, n in probe_difficulties(task, cfg)),
     )
 
 
