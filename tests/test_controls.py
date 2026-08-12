@@ -14,6 +14,8 @@ from grpo_doctor.eval.controls import (
     ShuffledLabels,
     alarm_step,
     constant_alarm,
+    is_degenerate,
+    operating_points,
     reward_only,
     step_index_only,
 )
@@ -67,6 +69,33 @@ def test_calibrating_a_constant_score_would_have_silenced_it() -> None:
     healthy = [constant_alarm(_run([0.0] * 10)) for _ in range(20)]
     naive = calibrate_threshold(healthy, target_far=0.05)
     assert alarm_step(constant_alarm(_run([0.0] * 10)), naive) is None
+
+
+def test_step_index_only_is_degenerate_on_equal_length_runs() -> None:
+    """The reason its 0.000 detection rate is not evidence against a time confound.
+
+    Every corpus run is 600 steps, so `t/T` is the same array for all of them, every per-run maximum
+    is 1.0, and a threshold can only fire on all runs or none. Reporting that as a pass would be
+    reading a vacuous number as a result.
+    """
+    runs = [step_index_only(_run([0.0] * 600)) for _ in range(20)]
+    assert operating_points(runs) == 1
+    assert is_degenerate(runs)
+    thr = calibrate_threshold(runs, target_far=0.05)
+    assert all(alarm_step(s, thr) is None for s in runs)
+
+
+def test_ragged_run_lengths_would_give_step_index_only_something_to_separate() -> None:
+    """And it is not degenerate then, so the check tracks the corpus rather than the control."""
+    runs = [step_index_only(_run([0.0] * n)) for n in (1, 2, 3, 600)]
+    assert operating_points(runs) > 1
+    assert not is_degenerate(runs)
+
+
+def test_reward_only_is_not_degenerate_on_the_kind_of_runs_it_sees() -> None:
+    rising = _run([0.5 + 0.01 * i for i in range(50)])
+    falling = _run([0.5] * 20 + [0.5 - 0.02 * i for i in range(30)])
+    assert not is_degenerate([reward_only(rising), reward_only(falling)])
 
 
 def test_calibration_holds_the_false_alarm_rate_at_or_under_target() -> None:

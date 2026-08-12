@@ -9,6 +9,14 @@ into the run the step is, so if it matches the real monitor the corpus is time-c
 result in the study is an artifact of collapses happening at predictable steps. It is the reason
 onsets are randomized in [50, 250]. If it fires, that is the finding, and it gets published as one.
 
+It also has to be read through `is_degenerate`, because on a corpus of equal-length runs it *cannot*
+fire: `t/T` is the same array for every run, so no threshold separates them and the only reachable
+false-alarm rates are 0.0 and 1.0. Its 0.000 detection rate on this corpus is therefore not evidence
+against a time confound -- it is the calibration refusing to buy detection at a 100% false-alarm
+rate, which it would refuse to do for any score at all. The confound has to be ruled out by the
+spread of `t_collapse` and by the observation that any fixed-step alarm costs FAR 1.0 here, and the
+control's own number is reported as vacuous rather than as a pass.
+
 **Shuffled-label** gives the null at this sample size. Without it a detection rate of 0.7 is
 uninterpretable, because nobody knows what chance looks like over 472 runs with this family
 imbalance. The permutation is *across* runs and never within: permuting within a run would leave
@@ -165,6 +173,29 @@ class ShuffledLabels:
         ]
 
 
+def operating_points(scores: Sequence[np.ndarray]) -> int:
+    """How many distinct false-alarm rates a threshold can produce over these runs.
+
+    A first-crossing alarm fires on a run exactly when `max(score) > threshold`, so moving the
+    threshold only ever changes the outcome at a *per-run maximum*. The distinct maxima are
+    therefore the entire set of operating points available, and a control with one of them can
+    reach a false-alarm rate of 0.0 or 1.0 and nothing in between.
+
+    That case is not hypothetical and it is not only `constant_alarm`. `step_index_only` scores
+    `t/T`, and every run in this corpus is exactly 600 steps -- so its score array is *identical*
+    for every run, its per-run maximum is 1.0 everywhere, and calibrating it to 5% correctly picks
+    the threshold that silences it. Reported without this check that reads as "the time-only
+    baseline detects nothing", which sounds like evidence against a time confound and is actually
+    evidence of nothing at all. See `is_degenerate`.
+    """
+    return len({float(np.max(s)) for s in scores if s.size})
+
+
+def is_degenerate(scores: Sequence[np.ndarray]) -> bool:
+    """True when no threshold separates these runs, so any rate reported for them is vacuous."""
+    return operating_points(scores) <= 1
+
+
 def alarm_step(scores: np.ndarray, threshold: float) -> int | None:
     """First step whose score crosses the threshold, or None.
 
@@ -184,6 +215,8 @@ __all__ = [
     "ShuffledLabels",
     "alarm_step",
     "constant_alarm",
+    "is_degenerate",
+    "operating_points",
     "reward_only",
     "step_index_only",
 ]
