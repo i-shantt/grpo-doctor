@@ -12,7 +12,11 @@ moves; it is not a changelog.
 - **Package** (`src/grpo_doctor/`) — `StepRecord`, `Monitor`, signal panel, the `t_collapse` labeler,
   evaluation metrics with run-level cluster bootstrap and exact McNemar, a TRL `TrainerCallback`,
   and a `replay`/`label` CLI. **numpy-only**; CI asserts `torch` never enters `sys.modules`.
-- **377 tests**, `mypy --strict` clean, CI green on Python 3.10–3.13 and macOS.
+- **Evaluation harness** (`src/grpo_doctor/eval/`) — `metrics.py`, plus `splits.py` (LOMO/LOCO with a
+  three-way fit/calib/eval partition, so the reported false-alarm rate is a measurement rather than
+  a restatement of the 5% target) and `controls.py` (the four negative controls, each producing a
+  per-step score so the identical alarm logic runs over all of them).
+- **414 tests**, `mypy --strict` clean, CI green on Python 3.10–3.13 and macOS.
 
 ## The probe was measuring two problems
 
@@ -64,7 +68,13 @@ difficulties 2 and 3 are trainable but not *labelable*, holding 6 and 62 distinc
 
 Six families had doses that were provably inert. Each would otherwise have been written up as
 *"GRPO resists this pathology"* — a claim about the algorithm — when the truth was a claim about our
-knob. Only F5's has been fixed so far; F4, F7 and F9 are derived and not yet re-dosed.
+knob.
+
+F5's was fixed and yields positives. **F4, F7 and F9 were re-dosed, smoke-gated, and the new doses
+are not in the grid** — all six came back inert, and in each case the reason turned out to be
+structural rather than a matter of turning the knob further. That is the better outcome of the two:
+a family that cannot fire *for a stated reason* is a result, where a family that fires once the dial
+is turned far enough is mostly a statement about the dial. The measurements are below.
 
 **F5 (verifier leakage).** Every leak accepts a *superset* of the correct answers, so a correct
 completion still scores 1.0 on a leaked problem: `E[always correct] = 1.0` against
@@ -93,13 +103,49 @@ Both are pinned by property tests in `tests/test_advantage_bound.py`.
 **F7 (reward noise).** Symmetric label noise is affine in expectation, `E[r'] = r(1−2p) + p`, so it
 scales the learning signal by exactly `(1−2p)`; measured correlation between noisy and clean
 advantages matches to three decimals. The grid's doses of 0.10 and 0.25 retain 80% and 50% of the
-signal — a slowdown, not a pathology. A dose that could bite needs p ≈ 0.40–0.45.
+signal — a slowdown, not a pathology.
+
+*Re-dosed, and the earlier guess was wrong.* This note used to say a dose that could bite needs
+p ≈ 0.40–0.45. It does not: `(1−2p)` is **positive for every p < 0.5**, so the sign of the learning
+signal survives at any dose below the vanishing point and the policy stalls rather than degrades. A
+stall leaves no drawdown, and a drawdown is what `t_collapse` labels on. Measured at p=0.40 —
+held-out accuracy 0.480 → 0.457, a drawdown of 0.023 against a threshold near 0.094, while training
+reward *rose* to 0.516, above the F0 control's 0.344, on the strength of flipped labels alone.
+Attenuation plus reward inflation, and healthy. p=0.45 the same. Both are out of the grid.
+
+The ordering inverts only at **p > 0.5**, where `E[r|wrong] = p` exceeds `E[r|correct] = 1−p` and
+the grader is actively training the policy toward incorrect completions. A two-cell probe there
+collapses decisively:
+
+| dose | reward peak | acc peak | acc final | drawdown |
+|---|---|---|---|---|
+| `p55` | 0.859 | 0.457 | 0.211 | **0.246** |
+| `p65` | 0.859 | 0.457 | **0.004** | **0.453** |
+
+At p=0.65 held-out accuracy ends at 0.004 while reward ends at 0.625 — reward rising through a total
+collapse, the project's headline signature reached by a second and mechanically distinct route:
+verifier corruption rather than policy gaming.
+
+**It is deliberately not in the taxonomy.** A grader that is wrong more often than right is an
+*inverted* verifier, not a flaky one, and putting it under F7's name would let a real result be read
+as a claim about grader noise. Adding it as its own family is a live option and costs a corpus
+regeneration (see the onset trap below); it is parked, not lost.
 
 **F4 (entropy collapse).** Configured to do the opposite of its name. The clipped surrogate caps
 policy change in *both* directions, so narrowing epsilon shrinks the trust region and **preserves**
 entropy by slowing the policy's sharpening. With `num_iterations=2`, inner iteration 0 has
 `ratio ≡ 1`, so only half the iterations can clip at all. The knob that actually targets entropy is
 `entropy_coef`, entering as `loss − coef·H`: a **negative** coefficient minimizes entropy directly.
+
+*Re-dosed at −0.05 and −0.25, and the family has no dose that works.* The knob does what it says —
+final entropy 0.090 (control) → 0.062 at −0.25 — and held-out accuracy does not move at either dose.
+The regime is why, and the corpus already measured it: **healthy runs lose entropy (mean Δ −0.149)
+and collapsed runs gain it (+0.108)**. Driving entropy down pushes the policy along the *healthy*
+direction, so no coefficient collapses a run by this route. The control even dips to 0.027, below
+anything the dosed run reaches, which makes the point plainly: low entropy is something that happens
+to healthy runs here, not the pathology. Premature entropy collapse needs a policy that has not
+learned the task yet, and the warm start puts every run in `TARGET_BAND` by construction — so this
+is a limit of the testbed's design, and a stronger dose is not the fix.
 
 **F9 (sampler/trainer mismatch).** The testbed supplies exactly the correction the real pathology
 omits. `generate()` scores each sampled token under the *noised* distribution it was actually drawn
@@ -119,11 +165,22 @@ strictly negative, so the ratio sits below 1 and clipping is one-sided. On sort_
 correctly-shaped *signal* and no collapse at all: reward still rises 0.285 → 0.456 against F0's
 0.285 → 0.439, and held-out accuracy does not move.
 
-*The fix, not yet applied:* score the sampled tokens under the **clean** logits while sampling from
-the noised ones. Then `ratio ≡ 1` at iteration 0 exactly as in TRL, the correction is omitted, and
-the gradient carries the bias. That version is also the harder detection problem — the clip metrics
-look normal while the estimator is quietly wrong — which is what makes the real thing dangerous. The
-existing noise doses stay as honest negatives, as F5's unshaped leaks did.
+*The fix, applied and then measured to be invisible.* `correct_sampler_gap=False` scores the sampled
+tokens under the **clean** logits while sampling from the noised ones, so `ratio ≡ 1` at iteration 0
+exactly as in TRL, the correction is omitted, and the gradient carries the bias. Sampling is bitwise
+identical under both settings and only the returned logprobs differ, which is what keeps the arms
+comparable; a test pins that rather than asserting it.
+
+What it produces at σ=0.75 is the F0 control, exactly: `clip_low` 0.000, `clip_high` 0.000,
+`ratio_max` 1.442 — the control's own values — against the corrected arm's 0.013 / 0.004 / 15.95.
+No collapse either. **That invisibility is the result**, and it is a sharp one: the arm that is
+actually wrong is the one that looks normal, while the arm that is correct is the one that lights up
+every clip metric. A monitor watching clip fractions would grade these two backwards.
+
+So the flag stays and **no corpus cell uses it**. A cell would only add runs indistinguishable from
+the control by construction. Raising σ further would not rescue it — a sampler that far from the
+trainer is a broken sampler, which is a different pathology wearing F9's name. The existing noise
+doses stay as honest negatives, as F5's unshaped leaks did.
 
 ## The corpus
 
@@ -181,15 +238,29 @@ The README must say plainly that two of four tasks were disqualified, and why �
 measure anything is a mistake worth publishing, since it is invisible in every downstream number and
 would have produced a confident, wrong result.
 
+### The onset trap
+
+Adding or removing a single cell churns most of the corpus, and it is worth knowing before proposing
+a grid change. `make_grid` draws onsets from one sequential generator in cell order
+(`manifest.py`, `onset = sample_onset(rng)`), so inserting a cell shifts the onset of **every run
+after it**, and a run whose spec changed is regenerated rather than reused. A new F7 cell therefore
+invalidates F7 through H5 — roughly 40% of the grid — for a change that touches one family.
+
+That is the price tag on the parked F7-inverted family and on any future dose: not the 20 runs of
+the cell, but a few hours and a diff across hundreds of committed traces. Deriving onsets from a
+hash of the `run_id` instead would decouple them and make cell additions incremental. **Not done** —
+it is a change to grid addressing and it would itself renumber the current corpus once, so it wants
+a deliberate decision rather than a drive-by.
+
 ## Next
 
-1. **Re-dose F4, F7 and F9** from the derivations above — `entropy_coef` negative rather than a
-   narrower epsilon, `flip_p` around 0.40–0.45, and an uncorrected sampler gap. Keep the current
-   doses as negatives. Smoke gate first; each is a grid change.
-2. **Phase 3.** Fit the detector ladder R0→R3, evaluate under leave-one-mode-out against the four
+1. **Phase 3.** Fit the detector ladder R0→R3, evaluate under leave-one-mode-out against the four
    negative controls, report lead time at a fixed 5% false-alarm rate with run-level cluster
-   bootstrap. `eval/metrics.py` is written and tested; `eval/splits.py`, `controls.py` and
-   `ablation.py` are not written yet.
-3. **Look at the controls before anything else.** If step-index-only matches the real monitor the
+   bootstrap. `eval/metrics.py`, `eval/splits.py` and `eval/controls.py` are written and tested;
+   `ablation.py` is not.
+2. **Look at the controls before anything else.** If step-index-only matches the real monitor the
    corpus is time-confounded and Phase 4 is a rebuild, not polish.
-4. Rewrite the README around the probe finding and the two disqualified tasks.
+3. Rewrite the README around the probe finding and the two disqualified tasks.
+4. *Optional, and a decision rather than a task:* add the inverted grader as its own family. It is a
+   confirmed positive by a mechanism the corpus does not otherwise contain, and it costs a partial
+   corpus regeneration for the reason above.
